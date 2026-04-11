@@ -34,6 +34,7 @@ pub fn save_transcript(app: AppHandle, content: String) -> Result<String, String
 /// Open the transcript directory in the system file manager
 /// macOS: Finder, Windows: Explorer
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn open_transcript_dir(app: AppHandle) -> Result<(), String> {
     let dir = transcript_dir(&app)?;
 
@@ -49,6 +50,12 @@ pub fn open_transcript_dir(app: AppHandle) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to open transcript dir: {}", e))?;
     Ok(())
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn open_transcript_dir(_app: AppHandle) -> Result<(), String> {
+    Err("open_transcript_dir is not supported on mobile.".to_string())
 }
 
 #[derive(Serialize)]
@@ -75,7 +82,7 @@ pub fn list_transcripts(app: AppHandle) -> Result<Vec<TranscriptEntry>, String> 
             let path = entry.path().to_string_lossy().to_string();
             let size_bytes = entry.metadata().ok()?.len();
             // Parse created_at from filename: YYYY-MM-DD_HH-MM-SS.md
-            let created_at = filename
+            let _created_at = filename
                 .strip_suffix(".md")
                 .unwrap_or(&filename)
                 .replace('_', " ")
@@ -121,4 +128,25 @@ pub fn read_transcript(app: AppHandle, filename: String) -> Result<String, Strin
     let filepath = dir.join(&filename);
     fs::read_to_string(&filepath)
         .map_err(|e| format!("Failed to read transcript: {}", e))
+}
+
+/// Delete a saved transcript file
+#[tauri::command]
+pub fn delete_transcript(app: AppHandle, filename: String) -> Result<(), String> {
+    // Sanitize: no path traversal, and require transcript files only
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid filename".to_string());
+    }
+    if !filename.ends_with(".md") {
+        return Err("Invalid filename".to_string());
+    }
+
+    let dir = transcript_dir(&app)?;
+    let filepath = dir.join(&filename);
+
+    match fs::remove_file(&filepath) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to delete transcript: {}", e)),
+    }
 }

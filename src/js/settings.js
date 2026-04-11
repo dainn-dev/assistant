@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   target_language: 'vi',
   audio_source: 'system',
   overlay_opacity: 0.85,
+  font_family: 'Inter',
   font_size: 16,
   max_lines: 5,
   show_original: true,
@@ -24,6 +25,18 @@ const DEFAULT_SETTINGS = {
   edge_tts_voice: 'vi-VN-HoaiMyNeural',
   edge_tts_speed: 50,
   tts_auto_read: true,
+  google_tts_api_key: '',
+  google_tts_voice: 'vi-VN-Chirp3-HD-Aoede',
+  google_tts_speed: 1.0,
+  // Interview RAG
+  pinecone_host: '',
+  pinecone_vector_dimension: 1536,
+  pinecone_api_key: '',
+  llm_url: '',
+  llm_model: '',
+  llm_api_key: '',
+  suggestion_type: 'translation',
+  app_mode: null,
 };
 
 class SettingsManager {

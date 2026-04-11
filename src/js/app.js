@@ -14,6 +14,7 @@ import { updater } from './updater.js';
 
 const { invoke } = window.__TAURI__.core;
 const { getCurrentWindow } = window.__TAURI__.window;
+const { listen } = window.__TAURI__.event;
 
 class App {
     constructor() {
@@ -32,16 +33,55 @@ class App {
         this.sessionMode = 'one_way';
         this.ttsEnabled = false;  // TTS runtime toggle
         this.isPinned = true;     // Always-on-top state
-        this.isCompact = false;   // Compact mode (hide control bar)
+        this.sidebarOpen = false; // Sidebar toggle state (always starts closed)
+        this.sessionActive = false;    // true between _createNewSession() and _endSession()
+        this.readOnlyMode = false;     // true when viewing a past conversation
+        this.activeConversationFilename = null;
+
+        // Chat UI (UI-only) — input posts into subtitle timeline
+        this.currentTemplate = null; // 'Interview' | 'Meeting' | null
+        this._interviewCvFile = null;
+        this._interviewJdFile = null;
+        this._interviewSuggestTimer = null;
+        this._interviewSuggestGen = 0;
+        this._ingestInterviewDebounce = null;
+        this._suggestionsDock = {
+            originalParent: null,
+            originalNextSibling: null,
+            docked: false,
+        };
+        this._interviewSuggestionsClosed = false;
+        this._interviewSuggestionsItems = [];
+        this._pickedSuggestion = null;
+        this._lastInterviewSuggestArgs = { transcriptContext: null, userDraft: null };
+        this._rightPanelCollapsed = false;
+        this._interviewSuggestPerf = {
+            origin: null, // 'speaker' | 'draft' | null
+            t0: 0,
+            timer: null,
+            hideTimer: null,
+        };
+        this._interviewSuggestionsStream = {
+            timers: [],
+        };
+        this._brainstormPending = false;
     }
 
     async init() {
         // Load settings
         await settingsManager.load();
 
+        // Set version from Tauri
+        try {
+            const ver = await window.__TAURI__.app.getVersion();
+            const el = document.getElementById('about-version');
+            if (el && ver) el.textContent = `v${ver}`;
+        } catch { /* non-fatal */ }
+
         // Init transcript UI
         const transcriptContainer = document.getElementById('transcript-content');
         this.transcriptUI = new TranscriptUI(transcriptContainer);
+        this.transcriptUI.onAfterRender = () => this._injectBrainstormButton();
 
         // Check platform — hide Local MLX on non-Apple-Silicon
         await this._checkPlatformSupport();
@@ -81,7 +121,10 @@ class App {
         this._initAboutTab();
         this._checkForUpdates();
 
-        console.log('🌐 My Translator v0.5.0 initialized');
+        // Load sidebar conversation list
+        this._loadConversationList();
+
+        console.log('🌐 MyJavis v0.5.0 initialized');
     }
 
     async _checkPlatformSupport() {
@@ -90,10 +133,25 @@ class App {
             const arch = await invoke('get_platform_info');
             const info = JSON.parse(arch);
             this.isAppleSilicon = (info.os === 'macos' && info.arch === 'aarch64');
+            this.isMobile = (info.os === 'android' || info.os === 'ios');
+            this.isAndroid = (info.os === 'android');
         } catch {
             // Fallback: check via navigator
             this.isAppleSilicon = navigator.platform === 'MacIntel' &&
                 navigator.userAgent.includes('Mac OS X');
+            const ua = (navigator.userAgent || '').toLowerCase();
+            this.isAndroid = ua.includes('android');
+            this.isMobile = this.isAndroid || /iphone|ipad|ipod/.test(ua);
+        }
+
+        if (this.isMobile) {
+            document.body.classList.add('mobile');
+        }
+
+        // Platform adaptations (Android)
+        if (this.isAndroid) {
+            await this._applyMobileDefaults();
+            this._filterTtsProviders();
         }
 
         if (!this.isAppleSilicon) {
@@ -111,17 +169,90 @@ class App {
         }
     }
 
+    async _applyMobileDefaults() {
+        // Android: system audio requires MediaProjection; default to mic for a smoother first-run.
+        const s = settingsManager.get();
+        const src = s.audio_source || 'system';
+        if (src === 'system') {
+            try {
+                await settingsManager.save({ audio_source: 'microphone' });
+            } catch {
+                // Non-fatal: we'll still continue with runtime defaults.
+            }
+        }
+    }
+
+    _filterTtsProviders() {
+        // Android: only keep Edge + Google (hide ElevenLabs + any future desktop-only providers).
+        const select = document.getElementById('select-tts-provider');
+        if (!select) return;
+
+        const allowed = new Set(['edge', 'google']);
+        Array.from(select.querySelectorAll('option')).forEach((opt) => {
+            const val = opt.getAttribute('value') || '';
+            if (!allowed.has(val)) opt.remove();
+        });
+
+        const s = settingsManager.get();
+        const provider = s.tts_provider || 'edge';
+        if (!allowed.has(provider)) {
+            // Update UI immediately; persist best-effort.
+            select.value = 'edge';
+            this._updateTTSProviderUI('edge');
+            settingsManager.save({ tts_provider: 'edge' }).catch(() => {});
+        }
+
+        // Also hide the removed provider settings blocks (if present).
+        const el = document.getElementById('tts-elevenlabs-settings');
+        if (el) el.style.display = 'none';
+    }
+
     // ─── Event Binding ──────────────────────────────────────
 
     _bindEvents() {
+        // Sidebar toggle
+        document.getElementById('btn-toggle-sidebar').addEventListener('click', () => {
+            this._toggleSidebar();
+        });
+
+        // Mobile: close sidebar when tapping backdrop
+        document.getElementById('mobile-overlay-backdrop')?.addEventListener('click', () => {
+            if (!this.isMobile) return;
+            // Close whichever overlay is open
+            this._setMobileSheetOpen(false);
+            this.sidebarOpen = false;
+            document.body.classList.remove('sidebar-open');
+            document.getElementById('sidebar')?.classList.add('hidden');
+        });
+
+        // Mobile FAB: toggle Interview bottom sheet
+        document.getElementById('btn-toggle-right-panel')?.addEventListener('click', () => {
+            if (!this.isMobile) return;
+            if (this.currentTemplate !== 'Interview') return;
+            const open = !document.body.classList.contains('sheet-open');
+            this._setMobileSheetOpen(open);
+        });
+
+        // Mobile: auto-collapse bottom sheet when user scrolls transcript
+        document.getElementById('transcript-container')?.addEventListener('scroll', () => {
+            if (!this.isMobile) return;
+            if (!document.body.classList.contains('sheet-open')) return;
+            this._setMobileSheetOpen(false);
+        }, { passive: true });
+
+        // New conversation
+        document.getElementById('btn-new-conversation').addEventListener('click', () => {
+            this._createNewSession();
+        });
+
+        // End session (separate button next to Start/Stop)
+        document.getElementById('btn-end-session')?.addEventListener('click', async () => {
+            await this._endSession();
+        });
+
         // Settings button
         document.getElementById('btn-settings').addEventListener('click', () => {
             this._showView('settings');
-        });
-
-        // Sessions button
-        document.getElementById('btn-sessions').addEventListener('click', () => {
-            this._showView('sessions');
         });
 
         // Back from settings
@@ -129,25 +260,6 @@ class App {
             this._showView('overlay');
         });
 
-        // Back from sessions
-        document.getElementById('btn-sessions-back').addEventListener('click', () => {
-            this._showView('overlay');
-        });
-
-        // Back from session viewer to session list
-        document.getElementById('btn-session-back-to-list').addEventListener('click', () => {
-            document.getElementById('sessions-list-panel').style.display = '';
-            document.getElementById('session-viewer').style.display = 'none';
-        });
-
-        // Copy session content
-        document.getElementById('btn-session-copy').addEventListener('click', async () => {
-            const content = document.getElementById('session-viewer-content')?.textContent || '';
-            if (content) {
-                await navigator.clipboard.writeText(content);
-                this._showToast('Copied to clipboard', 'success');
-            }
-        });
 
         // Close button (overlay)
         document.getElementById('btn-close').addEventListener('click', async () => {
@@ -167,16 +279,6 @@ class App {
             this._togglePin();
         });
 
-        // Compact mode button
-        document.getElementById('btn-compact').addEventListener('click', () => {
-            this._toggleCompact();
-        });
-
-        // View mode toggle (dual panel)
-        document.getElementById('btn-view-mode').addEventListener('click', () => {
-            this._toggleViewMode();
-        });
-
         // Font size quick controls
         document.getElementById('btn-font-up').addEventListener('click', () => this._adjustFontSize(4));
         document.getElementById('btn-font-down').addEventListener('click', () => this._adjustFontSize(-4));
@@ -191,14 +293,53 @@ class App {
             });
         });
 
+        this._initInterviewUploads();
+        this._bindInterviewSettingsKeys();
+        this._bindDimChips();
+
+        // Interview suggestions triggered by inline brainstorm button (see _injectBrainstormButton)
+
+        // Close Interview suggestions panel
+        document.getElementById('btn-close-suggestions')?.addEventListener('click', () => {
+            this._interviewSuggestionsClosed = true;
+            // Collapse instead of fully hiding so the "Suggestions" open button
+            // stays in the same header position as the close button.
+            const panel = document.getElementById('interview-suggestions-panel');
+            if (panel) panel.style.display = '';
+            if (this.isMobile) {
+                this._setMobileSheetOpen(false);
+            } else {
+                this._setRightPanelCollapsed(true);
+            }
+            // Keep docked if it was docked.
+        });
+
+        // Open Interview suggestions panel (after closing)
+        document.getElementById('btn-open-suggestions')?.addEventListener('click', () => {
+            if (this.currentTemplate !== 'Interview') return;
+            this._interviewSuggestionsClosed = false;
+            if (this.isMobile) {
+                this._setMobileSheetOpen(true);
+            } else {
+                this._setRightPanelCollapsed(false);
+            }
+            if (this._interviewSuggestionsItems.length) return;
+            const { transcriptContext, userDraft } = this._lastInterviewSuggestArgs || {};
+            // Manual mode: do not auto-generate on open
+            //this._setInterviewSuggestionsStatus('Ready — click ⟳ to generate');
+        });
+
         // Start/Stop button
         document.getElementById('btn-start').addEventListener('click', async () => {
             if (this.isStarting) return; // Prevent re-entry
             try {
                 if (this.isRunning) {
-                    await this.stop();
+                    await this._stopCapture();
                 } else {
                     this.isStarting = true;
+                    if (!this.sessionActive) {
+                        this._createNewSession();
+                    }
                     await this.start();
                 }
             } catch (err) {
@@ -226,13 +367,6 @@ class App {
             this._setSource('both');
         });
 
-        // Clear button — clears display only (auto-save happens on stop)
-        document.getElementById('btn-clear').addEventListener('click', async () => {
-            this.transcriptUI.clear();
-            this.transcriptUI.showPlaceholder();
-            this.recordingStartTime = null;
-        });
-
         // Copy transcript button
         document.getElementById('btn-copy').addEventListener('click', async () => {
             const text = this.transcriptUI.getPlainText();
@@ -241,6 +375,14 @@ class App {
                 this._showToast('Copied to clipboard', 'success');
             } else {
                 this._showToast('Nothing to copy', 'info');
+            }
+        });
+
+        // Chat input: Enter sends, Shift+Enter newline
+        document.getElementById('chat-input')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this._sendChatMessage();
             }
         });
 
@@ -331,6 +473,13 @@ class App {
             input.type = input.type === 'password' ? 'text' : 'password';
         });
 
+        document.querySelectorAll('.btn-toggle-ai-key').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const input = document.getElementById(btn.dataset.target);
+                if (input) input.type = input.type === 'password' ? 'text' : 'password';
+            });
+        });
+
         // Settings tab switching
         document.querySelectorAll('.settings-tab').forEach(tab => {
             tab.addEventListener('click', () => {
@@ -393,10 +542,12 @@ class App {
         sonioxClient.onTranslation = (text) => {
             this.transcriptUI.addTranslation(text);
             this._speakIfEnabled(text);
+            this._onInterviewSpeakerFinal(text);
         };
 
         sonioxClient.onProvisional = (text, speaker, language) => {
             if (text) {
+                this._brainstormPending = false;
                 this.transcriptUI.setProvisional(text, speaker, language);
             } else {
                 this.transcriptUI.clearProvisional();
@@ -505,11 +656,6 @@ class App {
                 this._togglePin();
             }
 
-            // Cmd/Ctrl + D: Toggle Compact
-            if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
-                e.preventDefault();
-                this._toggleCompact();
-            }
         });
     }
 
@@ -518,13 +664,9 @@ class App {
     _showView(view) {
         document.getElementById('overlay-view').classList.toggle('active', view === 'overlay');
         document.getElementById('settings-view').classList.toggle('active', view === 'settings');
-        document.getElementById('sessions-view').classList.toggle('active', view === 'sessions');
 
         if (view === 'settings') {
             this._populateSettingsForm();
-        }
-        if (view === 'sessions') {
-            this._showSessions();
         }
     }
 
@@ -626,6 +768,30 @@ class App {
         if (googleSpeedSlider) googleSpeedSlider.value = googleSpeed;
         if (googleSpeedLabel) googleSpeedLabel.textContent = googleSpeed + 'x';
 
+        // Interview AI fields
+        const pineHost = document.getElementById('interview-pinecone-host');
+        if (pineHost) pineHost.value = s.pinecone_host || '';
+        const pineDim = document.getElementById('interview-pinecone-dim');
+        if (pineDim) {
+            pineDim.value = String(s.pinecone_vector_dimension ?? 1536);
+            this._updateDimChips(pineDim.value);
+        }
+        const pineKey = document.getElementById('pinecone-api-key');
+        if (pineKey) pineKey.value = s.pinecone_api_key || '';
+        const llmUrl = document.getElementById('llm-url');
+        if (llmUrl) llmUrl.value = s.llm_url || '';
+        const llmModel = document.getElementById('llm-model');
+        if (llmModel) llmModel.value = s.llm_model || '';
+        const llmKey = document.getElementById('llm-api-key');
+        if (llmKey) llmKey.value = s.llm_api_key || '';
+        const appMode = document.getElementById('select-app-mode');
+        if (appMode) appMode.value = s.app_mode || '';
+        const suggestionType = document.getElementById('select-suggestion-type');
+        if (suggestionType) {
+            const v = s.suggestion_type || 'translation';
+            suggestionType.value = ['target', 'translation', 'both'].includes(v) ? v : 'translation';
+        }
+
         // TTS provider
         const providerSelect = document.getElementById('select-tts-provider');
         if (providerSelect) {
@@ -698,6 +864,20 @@ class App {
         settings.google_tts_speed = parseFloat(document.getElementById('range-google-speed')?.value || 1.0);
         settings.tts_enabled = false;
 
+        settings.pinecone_host = document.getElementById('interview-pinecone-host')?.value?.trim() || '';
+        settings.pinecone_vector_dimension = parseInt(
+            document.getElementById('interview-pinecone-dim')?.value || '1536',
+            10,
+        );
+        settings.llm_url = document.getElementById('llm-url')?.value?.trim() || '';
+        settings.llm_model = document.getElementById('llm-model')?.value?.trim() || '';
+        settings.pinecone_api_key = document.getElementById('pinecone-api-key')?.value?.trim() || '';
+        settings.llm_api_key = document.getElementById('llm-api-key')?.value?.trim() || '';
+        const st = document.getElementById('select-suggestion-type')?.value || 'translation';
+        settings.suggestion_type = ['target', 'translation', 'both'].includes(st) ? st : 'translation';
+        const am = document.getElementById('select-app-mode')?.value || '';
+        settings.app_mode = ['Interview', 'Meeting'].includes(am) ? am : null;
+
         try {
             await settingsManager.save(settings);
             this._showToast('Settings saved', 'success');
@@ -709,10 +889,35 @@ class App {
 
     // ─── Apply Settings ────────────────────────────────────
 
+    _updateChatInputState() {
+        const isInterview = this.currentTemplate === 'Interview';
+        const panel = document.getElementById('chat-panel');
+        if (panel) panel.style.display = isInterview ? '' : 'none';
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        if (!isInterview) return;
+        const hasKey = !!(settingsManager.get().llm_api_key?.trim());
+        input.disabled = !hasKey;
+        input.style.display = '';
+        input.placeholder = hasKey
+            ? 'Type a message… (Enter to send, Shift+Enter for newline)'
+            : 'Add LLM API key in Settings to enable chat';
+    }
+
     _applySettings(settings) {
         // Update overlay opacity
         const overlayView = document.getElementById('overlay-view');
         overlayView.style.opacity = settings.overlay_opacity || 0.85;
+
+        // Apply app font size to UI bits that use CSS vars (e.g. Interview suggestions)
+        const fs = Number(settings.font_size || 16);
+        document.documentElement.style.setProperty('--app-font-size', `${Number.isFinite(fs) ? fs : 16}px`);
+        const ff = String(settings.font_family || '').trim();
+        if (ff) {
+            document.documentElement.style.setProperty('--app-font-family', ff);
+        } else {
+            document.documentElement.style.removeProperty('--app-font-family');
+        }
 
         // Update transcript UI
         if (this.transcriptUI) {
@@ -720,6 +925,7 @@ class App {
                 maxLines: settings.max_lines || 5,
                 showOriginal: settings.show_original !== false,
                 fontSize: settings.font_size || 16,
+                viewMode: 'subtitle',
             });
         }
 
@@ -730,6 +936,14 @@ class App {
         // TTS is always OFF on app start — user must toggle on each session
         this.ttsEnabled = false;
         this._updateTTSButton();
+
+        // Sync mode from settings
+        const savedMode = settings.app_mode || null;
+        if (savedMode !== this.currentTemplate) {
+            this._setTemplateMode(savedMode);
+        }
+
+        this._updateChatInputState();
     }
 
     // ─── TTS Control ──────────────────────────────────────
@@ -975,6 +1189,7 @@ class App {
 
         this.isRunning = true;
         this._updateStartButton();
+        this._updateControlsForMode();
         if (!this.recordingStartTime) this.recordingStartTime = Date.now();
 
         // Record session metadata for auto-save
@@ -1029,8 +1244,12 @@ class App {
             endpointDelay: settings.endpoint_delay || 3000,
         });
 
-        // Start audio capture — Rust batches audio every 200ms, JS just forwards
+        // If system audio is selected, request MediaProjection first (no-op on desktop).
         try {
+            if (this.currentSource === 'system' || this.currentSource === 'both') {
+                await invoke('request_media_projection');
+            }
+
             let audioChunkCount = 0;
 
             const channel = new window.__TAURI__.core.Channel();
@@ -1061,8 +1280,12 @@ class App {
         console.log('[App] Starting Local mode (MLX models)...');
         this._updateStatus('connecting');
 
-        // Step 0: Check audio permission FIRST (before loading models)
+        // Step 0: Check audio permission FIRST (before loading models).
+        // If system audio is selected, request MediaProjection first (no-op on desktop).
         try {
+            if (this.currentSource === 'system' || this.currentSource === 'both') {
+                await invoke('request_media_projection');
+            }
             await invoke('start_capture', {
                 source: this.currentSource,
                 channel: new window.__TAURI__.core.Channel(), // dummy channel for permission check
@@ -1182,6 +1405,7 @@ class App {
                 if (data.translated) {
                     this.transcriptUI.addTranslation(data.translated);
                     this._speakIfEnabled(data.translated);
+                    this._onInterviewSpeakerFinal(data.translated);
                 }
                 }, 80);
                 break;
@@ -1317,11 +1541,12 @@ class App {
         });
     }
 
-    async stop() {
+    async _stopCapture() {
+        if (!this.isRunning) return;
         this.isRunning = false;
         this._updateStartButton();
+        this._updateControlsForMode();
 
-        // Stop audio capture
         try {
             await invoke('stop_capture');
         } catch (err) {
@@ -1329,7 +1554,6 @@ class App {
         }
 
         if (this.translationMode === 'local') {
-            // Stop local pipeline
             try {
                 await invoke('stop_local_pipeline');
             } catch (err) {
@@ -1339,18 +1563,18 @@ class App {
             this.transcriptUI.removeStatusMessage();
             this._updateStatus('disconnected');
         } else {
-            // Disconnect Soniox
             sonioxClient.disconnect();
         }
 
-        // Keep transcript visible — don't clear
         this.transcriptUI.clearProvisional();
 
-        // Stop TTS
         elevenLabsTTS.disconnect();
         edgeTTSRust.disconnect();
-
         audioPlayer.stop();
+    }
+
+    async stop() {
+        await this._stopCapture();
 
         // Auto-save on stop — use full sessionLog (not trimmed display buffer)
         if (this.transcriptUI.hasSessionContent()) {
@@ -1362,6 +1586,44 @@ class App {
         this.sessionStartTime = null;
     }
 
+    _createNewSession() {
+        this.readOnlyMode = false;
+        this.activeConversationFilename = null;
+        this.sessionActive = true;
+        this.sessionStartTime = null;
+        this.recordingStartTime = null;
+        this._updateControlsForMode();
+
+        this.transcriptUI.clear();
+        this.transcriptUI.showPlaceholder();
+
+        document.querySelectorAll('#conversation-list .conversation-item').forEach(el => {
+            el.classList.remove('active');
+        });
+    }
+
+    async _endSession() {
+        await this._stopCapture();
+
+        if (this.transcriptUI.hasSessionContent()) {
+            await this._saveTranscriptFile();
+            this.transcriptUI.clearSession();
+        }
+
+        this.sessionStartTime = null;
+        this.recordingStartTime = null;
+        this.sessionActive = false;
+        this.readOnlyMode = false;
+        this._updateControlsForMode();
+
+        this.transcriptUI.clear();
+        this.transcriptUI.showPlaceholder();
+
+        if (typeof this._loadConversationList === 'function') {
+            await this._loadConversationList();
+        }
+    }
+
     _updateStartButton() {
         const btn = document.getElementById('btn-start');
         const iconPlay = document.getElementById('icon-play');
@@ -1370,6 +1632,27 @@ class App {
         btn.classList.toggle('recording', this.isRunning);
         iconPlay.style.display = this.isRunning ? 'none' : 'block';
         iconStop.style.display = this.isRunning ? 'block' : 'none';
+    }
+
+    _updateEndButtonVisibility() {
+        this._updateControlsForMode();
+    }
+
+    _updateControlsForMode() {
+        const btnStart = document.getElementById('btn-start');
+        if (this.readOnlyMode) {
+            btnStart.disabled = true;
+            btnStart.style.opacity = '0.35';
+            btnStart.style.pointerEvents = 'none';
+        } else {
+            btnStart.disabled = false;
+            btnStart.style.opacity = '';
+            btnStart.style.pointerEvents = '';
+        }
+        const btnEndSession = document.getElementById('btn-end-session');
+        const hasSessionContent = !!this.transcriptUI?.hasSessionContent?.();
+        const shouldShowEnd = !this.readOnlyMode && (this.sessionActive || this.isRunning || hasSessionContent);
+        if (btnEndSession) btnEndSession.style.display = shouldShowEnd ? 'flex' : 'none';
     }
 
     // ─── Transcript Persistence ───────────────────────────────
@@ -1498,26 +1781,13 @@ class App {
 
     // ─── Compact Mode ───────────────────────────────
 
-    _toggleCompact() {
-        this.isCompact = !this.isCompact;
-        const dragRegion = document.getElementById('drag-region');
-        const overlay = document.getElementById('overlay-view');
-
-        if (this.isCompact) {
-            dragRegion.classList.add('compact-hidden');
-            overlay.classList.add('compact-mode');
-        } else {
-            dragRegion.classList.remove('compact-hidden');
-            overlay.classList.remove('compact-mode');
+    _toggleSidebar() {
+        this.sidebarOpen = !this.sidebarOpen;
+        const sidebar = document.getElementById('sidebar');
+        sidebar.classList.toggle('hidden', !this.sidebarOpen);
+        if (this.isMobile) {
+            document.body.classList.toggle('sidebar-open', this.sidebarOpen);
         }
-    }
-
-    _toggleViewMode() {
-        const isDual = this.transcriptUI.viewMode === 'dual';
-        const newMode = isDual ? 'single' : 'dual';
-        this.transcriptUI.configure({ viewMode: newMode });
-        const btn = document.getElementById('btn-view-mode');
-        if (btn) btn.classList.toggle('active', newMode === 'dual');
     }
 
     _adjustFontSize(delta) {
@@ -1540,63 +1810,160 @@ class App {
 
     // ─── Session History ───────────────────────────────────
 
-    async _showSessions() {
-        const listEl = document.getElementById('sessions-list');
-        const listPanel = document.getElementById('sessions-list-panel');
-        const viewer = document.getElementById('session-viewer');
+    async _openConversationReadOnly(filename) {
+        this.readOnlyMode = true;
+        this._updateControlsForMode();
 
-        if (listPanel) listPanel.style.display = '';
-        if (viewer) viewer.style.display = 'none';
-        if (!listEl) return;
+        document.querySelectorAll('#conversation-list .conversation-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.filename === filename);
+        });
 
-        listEl.innerHTML = '<div class="sessions-loading">Loading...</div>';
+        this.activeConversationFilename = filename;
 
-        try {
-            const sessions = await invoke('list_transcripts');
-            if (sessions.length === 0) {
-                listEl.innerHTML = '<div class="sessions-empty">No saved sessions yet.</div>';
-                return;
-            }
-
-            listEl.innerHTML = sessions.map(s => {
-                const meta = this._parseSessionMeta(s);
-                return `<div class="session-item" data-filename="${this._escAttr(s.filename)}">
-                    <div class="session-item-date">${meta.date}</div>
-                    <div class="session-item-meta">
-                        <span class="session-item-time">${meta.time}</span>
-                        ${meta.duration ? `<span class="session-item-duration">${meta.duration}</span>` : ''}
-                        ${meta.langPair ? `<span class="session-item-langs">${meta.langPair}</span>` : ''}
-                    </div>
-                    <div class="session-item-size">${this._formatBytes(s.size_bytes)}</div>
-                </div>`;
-            }).join('');
-
-            listEl.querySelectorAll('.session-item').forEach(item => {
-                item.addEventListener('click', () => {
-                    this._openSession(item.dataset.filename);
-                });
-            });
-        } catch (err) {
-            listEl.innerHTML = `<div class="sessions-empty">Error: ${err}</div>`;
-        }
-    }
-
-    async _openSession(filename) {
-        const listPanel = document.getElementById('sessions-list-panel');
-        const viewer = document.getElementById('session-viewer');
-        const title = document.getElementById('session-viewer-title');
-        const content = document.getElementById('session-viewer-content');
-
-        if (listPanel) listPanel.style.display = 'none';
-        if (viewer) viewer.style.display = '';
-        if (title) title.textContent = filename.replace('.md', '').replace('_', ' ');
-        if (content) content.textContent = 'Loading...';
+        const contentEl = document.getElementById('transcript-content');
+        if (contentEl) contentEl.textContent = 'Loading...';
 
         try {
             const text = await invoke('read_transcript', { filename });
-            if (content) content.textContent = text;
+            const segments = this._parseSavedTranscriptToSegments(text);
+            this.transcriptUI.configure({ viewMode: 'subtitle' });
+            this.transcriptUI.clear();
+            this.transcriptUI.loadSegments(segments, { replaceSessionLog: false });
+
+            if (!segments.length && contentEl) {
+                contentEl.textContent = 'No transcript content.';
+            }
         } catch (err) {
-            if (content) content.textContent = `Error loading session: ${err}`;
+            if (contentEl) contentEl.textContent = `Error loading: ${err}`;
+        }
+    }
+
+    _parseSavedTranscriptToSegments(text) {
+        const raw = String(text || '');
+        if (!raw.trim()) return [];
+
+        // Strip first YAML frontmatter block: --- ... ---
+        let body = raw;
+        if (body.startsWith('---')) {
+            const second = body.indexOf('\n---', 3);
+            if (second !== -1) {
+                const after = body.indexOf('\n', second + 1);
+                body = after !== -1 ? body.slice(after + 1) : '';
+            }
+        }
+
+        const lines = body.split(/\r?\n/);
+        const segments = [];
+
+        let currentSpeaker = null;
+        let pending = null; // { speaker, original, createdAt }
+
+        const speakerRe = /^\*\*Speaker\s+(.+?):\*\*\s*$/i;
+
+        const flushPendingIfAny = () => {
+            if (!pending) return;
+            segments.push({
+                original: pending.original || '',
+                translation: pending.translation || '',
+                status: 'translated',
+                speaker: pending.speaker,
+                language: null,
+                confidence: null,
+                createdAt: pending.createdAt,
+            });
+            pending = null;
+        };
+
+        for (let i = 0; i < lines.length; i++) {
+            const lineRaw = lines[i];
+            const line = (lineRaw || '').trim();
+            if (!line) continue;
+
+            const sp = line.match(speakerRe);
+            if (sp) {
+                const s = (sp[1] || '').trim();
+                currentSpeaker = s;
+                continue;
+            }
+
+            if (line.startsWith('>')) {
+                // If we already had a pending EN without a VI, flush it before starting a new one.
+                flushPendingIfAny();
+                const original = line.replace(/^>\s*/, '').trim();
+                pending = {
+                    speaker: currentSpeaker,
+                    original,
+                    translation: '',
+                    createdAt: Date.now() + segments.length,
+                };
+                continue;
+            }
+
+            // Treat as VI line if we have pending EN.
+            if (pending && !pending.translation) {
+                pending.translation = line;
+                flushPendingIfAny();
+            }
+        }
+
+        // Flush any trailing EN without VI
+        flushPendingIfAny();
+
+        // Normalize speaker values: if stored as "Speaker 1" accidentally, reduce to "1"
+        segments.forEach(s => {
+            if (typeof s.speaker === 'string') {
+                const m = s.speaker.match(/^Speaker\s+(.+)$/i);
+                if (m) s.speaker = m[1].trim();
+            }
+        });
+
+        return segments.filter(s => (s.original || s.translation));
+    }
+
+    async _loadConversationList() {
+        const listEl = document.getElementById('conversation-list');
+        if (!listEl) return;
+
+        try {
+            const sessions = await invoke('list_transcripts');
+            listEl.innerHTML = '';
+
+            sessions.forEach(s => {
+                const meta = this._parseSessionMeta(s);
+                const li = document.createElement('li');
+                li.className = 'conversation-item';
+                li.dataset.filename = s.filename;
+                li.innerHTML = `
+                    <span class="conversation-label">🗨 ${meta.date} ${meta.time}</span>
+                    <button type="button" class="btn-remove-conversation" title="Delete conversation" aria-label="Delete conversation">×</button>
+                `;
+
+                const removeBtn = li.querySelector('.btn-remove-conversation');
+                removeBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const filename = s.filename;
+                    const ok = confirm(`Delete conversation "${filename}"?\n\nThis cannot be undone.`);
+                    if (!ok) return;
+                    try {
+                        await invoke('delete_transcript', { filename });
+                        // If currently viewing this conversation in read-only, exit to a safe state
+                        if (this.readOnlyMode && this.activeConversationFilename === filename) {
+                            this._createNewSession();
+                            this.activeConversationFilename = null;
+                        }
+                        await this._loadConversationList();
+                        this._showToast('Deleted conversation', 'success');
+                    } catch (err) {
+                        this._showToast(`Delete failed: ${err}`, 'error');
+                    }
+                });
+                li.addEventListener('click', () => {
+                    this._openConversationReadOnly(s.filename);
+                });
+                listEl.appendChild(li);
+            });
+        } catch (err) {
+            console.error('[Sidebar] Failed to load conversations:', err);
         }
     }
 
@@ -1690,11 +2057,11 @@ class App {
         // GitHub links
         document.getElementById('link-github')?.addEventListener('click', (e) => {
             e.preventDefault();
-            window.__TAURI__?.opener?.openUrl('https://github.com/phuc-nt/my-translator');
+            window.__TAURI__?.opener?.openUrl('https://github.com/dainn-dev/assistant');
         });
         document.getElementById('link-issues')?.addEventListener('click', (e) => {
             e.preventDefault();
-            window.__TAURI__?.opener?.openUrl('https://github.com/phuc-nt/my-translator/issues');
+            window.__TAURI__?.opener?.openUrl('https://github.com/dainn-dev/assistant/issues');
         });
 
         // Check for Updates button
@@ -1773,6 +2140,923 @@ class App {
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);
         }, duration);
+    }
+
+    _insertIntoTextarea(textarea, insertText) {
+        const start = textarea.selectionStart ?? textarea.value.length;
+        const end = textarea.selectionEnd ?? textarea.value.length;
+        const before = textarea.value.slice(0, start);
+        const after = textarea.value.slice(end);
+        textarea.value = before + insertText + after;
+        const nextPos = start + insertText.length;
+        textarea.focus();
+        textarea.setSelectionRange(nextPos, nextPos);
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    _setTemplateMode(mode) {
+        this.currentTemplate = mode || null;
+        if (this.currentTemplate === 'Interview') {
+            this._interviewSuggestionsClosed = false;
+        }
+
+        // Mobile: mark interview-active for FAB visibility
+        document.body.classList.toggle('interview-active', this.currentTemplate === 'Interview');
+
+        // Update dropdown label
+        const templateLabel = document.querySelector('#btn-template .template-trigger-label');
+        if (templateLabel) templateLabel.textContent = this.currentTemplate || 'Template';
+
+        const uploads = document.getElementById('interview-uploads');
+        if (uploads) uploads.style.display = this.currentTemplate === 'Interview' ? '' : 'none';
+        const sugPanel = document.getElementById('interview-suggestions-panel');
+        if (sugPanel && this.currentTemplate !== 'Interview') {
+            sugPanel.style.display = 'none';
+            this._undockInterviewSuggestions();
+            this._rightPanelCollapsed = false;
+        }
+        if (this.currentTemplate !== 'Interview') {
+            this._interviewSuggestGen += 1;
+            if (this.isMobile) this._setMobileSheetOpen(false);
+        } else {
+            // Always show the panel in Interview mode (even before suggestions exist).
+            if (sugPanel) sugPanel.style.display = '';
+            if (this.isMobile) {
+                this._undockInterviewSuggestions();
+                this._setMobileSheetOpen(false);
+            } else {
+                this._dockInterviewSuggestionsRight();
+                // Default to collapsed rail until user opens (and/or suggestions arrive).
+                this._setRightPanelCollapsed(true);
+            }
+            this._scheduleInterviewIngest();
+        }
+        this._updateChatInputState();
+    }
+
+    _dockInterviewSuggestionsRight() {
+        if (this.isMobile) return;
+        const panel = document.getElementById('interview-suggestions-panel');
+        const right = document.getElementById('right-panel');
+        const resizer = document.getElementById('right-panel-resizer');
+        const contentArea = document.getElementById('content-area');
+        if (!panel || !right || !contentArea) return;
+
+        // Record original DOM position once, so we can restore later.
+        if (!this._suggestionsDock.originalParent) {
+            this._suggestionsDock.originalParent = panel.parentElement;
+            this._suggestionsDock.originalNextSibling = panel.nextSibling;
+        }
+
+        if (panel.parentElement !== right) {
+            right.appendChild(panel);
+        }
+
+        right.style.display = '';
+        if (resizer) resizer.style.display = '';
+        contentArea.classList.add('split-suggestions');
+        panel.classList.add('docked-right');
+        this._suggestionsDock.docked = true;
+
+        this._initRightPanelResizer();
+    }
+
+    _initRightPanelResizer() {
+        const resizer = document.getElementById('right-panel-resizer');
+        const right = document.getElementById('right-panel');
+        const contentArea = document.getElementById('content-area');
+        if (!resizer || !right || !contentArea || resizer._resizerBound) return;
+        resizer._resizerBound = true;
+
+        // Restore saved width
+        const saved = localStorage.getItem('rightPanelWidth');
+        if (saved) right.style.width = saved;
+
+        resizer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            resizer.classList.add('dragging');
+            const startX = e.clientX;
+            const startW = right.getBoundingClientRect().width;
+            const totalW = contentArea.getBoundingClientRect().width;
+            const maxW = Math.floor(totalW * 0.5);
+
+            const onMove = (ev) => {
+                const dx = startX - ev.clientX; // drag left = wider panel
+                const newW = Math.min(maxW, Math.max(200, startW + dx));
+                right.style.width = newW + 'px';
+            };
+
+            const onUp = () => {
+                resizer.classList.remove('dragging');
+                localStorage.setItem('rightPanelWidth', right.style.width);
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+
+    _setRightPanelCollapsed(collapsed) {
+        const contentArea = document.getElementById('content-area');
+        const btnOpen = document.getElementById('btn-open-suggestions');
+        const btnClose = document.getElementById('btn-close-suggestions');
+        if (!contentArea || !btnOpen || !btnClose) return;
+        this._rightPanelCollapsed = !!collapsed;
+        contentArea.classList.toggle('right-panel-collapsed', this._rightPanelCollapsed);
+        btnOpen.style.display = this._rightPanelCollapsed ? '' : 'none';
+        btnClose.style.display = this._rightPanelCollapsed ? 'none' : '';
+    }
+
+    _setMobileSheetOpen(open) {
+        if (!this.isMobile) return;
+        document.body.classList.toggle('sheet-open', !!open);
+        // Ensure sidebar state doesn't conflict with sheet UX.
+        if (open) {
+            this.sidebarOpen = false;
+            document.body.classList.remove('sidebar-open');
+            document.getElementById('sidebar')?.classList.add('hidden');
+        }
+    }
+
+    _undockInterviewSuggestions() {
+        const panel = document.getElementById('interview-suggestions-panel');
+        const right = document.getElementById('right-panel');
+        const contentArea = document.getElementById('content-area');
+        if (!panel || !right || !contentArea) return;
+
+        panel.classList.remove('docked-right');
+
+        const { originalParent, originalNextSibling } = this._suggestionsDock;
+        if (originalParent) {
+            if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+                originalParent.insertBefore(panel, originalNextSibling);
+            } else {
+                originalParent.appendChild(panel);
+            }
+        }
+
+        const resizer = document.getElementById('right-panel-resizer');
+        if (resizer) resizer.style.display = 'none';
+        right.style.display = 'none';
+        contentArea.classList.remove('split-suggestions');
+        this._suggestionsDock.docked = false;
+    }
+
+    _isAllowedInterviewFile(filename) {
+        const name = String(filename || '').toLowerCase();
+        return name.endsWith('.pdf') || name.endsWith('.docx');
+    }
+
+    _updateInterviewUploadPills() {
+        const pillCv = document.getElementById('pill-cv');
+        const pillCvName = document.getElementById('pill-cv-name');
+        const pillJd = document.getElementById('pill-jd');
+        const pillJdName = document.getElementById('pill-jd-name');
+
+        if (pillCv && pillCvName) {
+            if (this._interviewCvFile) {
+                pillCvName.textContent = this._interviewCvFile.name || 'CV';
+                pillCv.style.display = '';
+            } else {
+                pillCvName.textContent = '';
+                pillCv.style.display = 'none';
+            }
+        }
+
+        if (pillJd && pillJdName) {
+            if (this._interviewJdFile) {
+                pillJdName.textContent = this._interviewJdFile.name || 'JD';
+                pillJd.style.display = '';
+            } else {
+                pillJdName.textContent = '';
+                pillJd.style.display = 'none';
+            }
+        }
+    }
+
+    _initInterviewUploads() {
+        const uploads = document.getElementById('interview-uploads');
+        const btnUpload = document.getElementById('btn-upload-interview-files');
+        const inputFiles = document.getElementById('file-upload-interview');
+        const clearCv = document.getElementById('pill-cv-clear');
+        const clearJd = document.getElementById('pill-jd-clear');
+
+        if (!uploads || !btnUpload || !inputFiles) return;
+
+        // Default hidden until Interview selected
+        uploads.style.display = 'none';
+
+        btnUpload.addEventListener('click', () => inputFiles.click());
+
+        inputFiles.addEventListener('change', () => {
+            const files = Array.from(inputFiles.files || []);
+            if (!files.length) return;
+
+            const allowed = files.filter(f => this._isAllowedInterviewFile(f.name));
+            if (!allowed.length) {
+                inputFiles.value = '';
+                this._showToast('Please choose .pdf or .docx files', 'error');
+                return;
+            }
+
+            // Use selection order: first = CV, second = JD (if present)
+            this._interviewCvFile = allowed[0] || null;
+            this._interviewJdFile = allowed[1] || null;
+            this._updateInterviewUploadPills();
+            this._scheduleInterviewIngest();
+        });
+
+        clearCv?.addEventListener('click', () => {
+            this._interviewCvFile = null;
+            inputFiles.value = '';
+            this._updateInterviewUploadPills();
+        });
+
+        clearJd?.addEventListener('click', () => {
+            this._interviewJdFile = null;
+            inputFiles.value = '';
+            this._updateInterviewUploadPills();
+        });
+
+        this._updateInterviewUploadPills();
+    }
+
+    _initTemplateDropdown() {
+        const trigger = document.getElementById('btn-template');
+        const menu = document.getElementById('menu-template');
+        const input = document.getElementById('chat-input');
+        if (!trigger || !menu || !input) return;
+
+        const setOpen = (open) => {
+            if (open) {
+                menu.classList.add('open');
+                trigger.setAttribute('aria-expanded', 'true');
+                menu.setAttribute('aria-hidden', 'false');
+            } else {
+                menu.classList.remove('open');
+                trigger.setAttribute('aria-expanded', 'false');
+                menu.setAttribute('aria-hidden', 'true');
+            }
+        };
+
+        const isOpen = () => menu.classList.contains('open');
+
+        trigger.addEventListener('click', (e) => {
+            e.preventDefault();
+            setOpen(!isOpen());
+        });
+
+        // Select mode on item click (no textbox insertion)
+        menu.querySelectorAll('.template-item').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                this._setTemplateMode(btn.textContent?.trim() || null);
+                input.focus();
+                setOpen(false);
+            });
+        });
+
+        // Close when clicking outside
+        document.addEventListener('mousedown', (e) => {
+            const dropdown = document.getElementById('template-dropdown');
+            if (!dropdown) return;
+            if (!dropdown.contains(e.target)) setOpen(false);
+        });
+
+        // Close on Esc
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') setOpen(false);
+        });
+    }
+
+    _sendChatMessage() {
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        const text = (input.value || '').trim();
+        if (!text) return;
+
+        input.value = '';
+        this.transcriptUI?.addChatMessage?.(text, 'ME');
+        this._consumePickedSuggestion(text);
+        if (this.currentTemplate === 'Interview') {
+            (async () => {
+                try {
+                    await invoke('save_interview_message', {
+                        req: { userId: this._getInterviewUserId(), role: 'user', content: text },
+                    });
+                } catch (e) {
+                    console.warn('[Interview] save user message', e);
+                }
+                this._lastInterviewSuggestArgs = { transcriptContext: null, userDraft: text };
+                this._interviewSuggestionsClosed = false;
+                this._setRightPanelCollapsed(false);
+                this._markInterviewSuggestStart('draft');
+                this._scheduleInterviewSuggestions({ transcriptContext: null, userDraft: text });
+            })();
+        }
+    }
+
+    _consumePickedSuggestion(sentText) {
+        const picked = this._pickedSuggestion;
+        this._pickedSuggestion = null;
+        if (!picked || picked.id == null) return;
+        if (!sentText || !String(sentText).includes(picked.text)) return;
+
+        const next = this._interviewSuggestionsItems.filter((it) => it.id !== picked.id);
+        if (next.length === this._interviewSuggestionsItems.length) return;
+
+        this._renderInterviewSuggestions(next);
+    }
+
+    _updateDimChips(currentVal) {
+        document.querySelectorAll('.ai-dim-chip').forEach(chip => {
+            chip.classList.toggle('active', chip.dataset.dim === String(currentVal));
+        });
+    }
+
+    _bindDimChips() {
+        const dimInput = document.getElementById('interview-pinecone-dim');
+        if (!dimInput) return;
+        document.querySelectorAll('.ai-dim-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                dimInput.value = chip.dataset.dim;
+                this._updateDimChips(chip.dataset.dim);
+            });
+        });
+        dimInput.addEventListener('input', () => this._updateDimChips(dimInput.value));
+    }
+
+    _bindInterviewSettingsKeys() {
+        document.querySelectorAll('.interview-key-row').forEach((row) => {
+            const provider = row.dataset.provider;
+            if (!provider) return;
+            const keyInput = row.querySelector('.interview-key-input');
+            const icon = row.querySelector('.interview-key-icon');
+
+            // Clear input when focused if showing placeholder dots
+            keyInput?.addEventListener('focus', () => {
+                if (keyInput.dataset.hasSavedKey === 'true') keyInput.value = '';
+            });
+
+            // Auto-save on blur
+            keyInput?.addEventListener('blur', async () => {
+                const apiKey = keyInput.value.trim();
+                if (!apiKey || apiKey === '••••••••') return;
+                try {
+                    await invoke('interview_set_api_key', { payload: { provider, apiKey } });
+                    await this._refreshInterviewKeyRows();
+                } catch (err) {
+                    this._showToast(`Key save failed: ${err}`, 'error');
+                }
+            });
+
+            // Auto-save on Enter
+            keyInput?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') keyInput.blur();
+            });
+
+            // Click green tick → clear
+            icon?.addEventListener('click', async () => {
+                if (!icon.classList.contains('is-saved')) return;
+                try {
+                    await invoke('interview_clear_api_key', { provider });
+                    await this._refreshInterviewKeyRows();
+                } catch (err) {
+                    this._showToast(`Clear failed: ${err}`, 'error');
+                }
+            });
+        });
+    }
+
+    async _refreshInterviewKeyRows() {
+        const st = await invoke('interview_key_status').catch((e) => {
+            console.warn('[Interview] key status', e);
+            return null;
+        });
+        if (!st) return;
+        document.querySelectorAll('.interview-key-row').forEach((row) => {
+            const p = row.dataset.provider;
+            const input = row.querySelector('.interview-key-input');
+            const icon = row.querySelector('.interview-key-icon');
+            if (!p) return;
+            const on = st[p] === true;
+            if (input) {
+                input.dataset.hasSavedKey = on ? 'true' : 'false';
+                input.classList.toggle('is-saved', on);
+                if (on && !input.value) input.value = '••••••••';
+                if (!on) input.value = '';
+            }
+            if (icon) {
+                icon.classList.toggle('is-saved', on);
+                icon.classList.toggle('not-set', !on);
+                icon.title = on ? 'Click to clear' : 'Not set';
+                icon.innerHTML = on
+                    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>'
+                    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+            }
+        });
+    }
+
+    _getInterviewUserId() {
+        const KEY = 'myjavis_interview_user_id';
+        let id = localStorage.getItem(KEY);
+        if (!id) {
+            id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `u_${Date.now()}`;
+            localStorage.setItem(KEY, id);
+        }
+        return id;
+    }
+
+    _scheduleInterviewIngest() {
+        if (this.currentTemplate !== 'Interview') return;
+        if (!this._interviewCvFile && !this._interviewJdFile) return;
+        clearTimeout(this._ingestInterviewDebounce);
+        this._ingestInterviewDebounce = setTimeout(() => void this._ingestInterviewFilesNow(), 500);
+    }
+
+    async _ingestInterviewFilesNow() {
+        if (!this._interviewCvFile && !this._interviewJdFile) return;
+
+        const progressEl = document.getElementById('ingest-progress');
+        const fillEl = document.getElementById('ingest-progress-fill');
+        const labelEl = document.getElementById('ingest-progress-label');
+
+        const stageLabel = { extracting: 'Extracting…', embedding: 'Embedding…', upserting: 'Saving to index…', done: 'Done' };
+        const showProgress = (pct, label) => {
+            if (progressEl) progressEl.style.display = 'flex';
+            if (fillEl) fillEl.style.width = `${pct}%`;
+            if (labelEl) labelEl.textContent = label;
+        };
+        const hideProgress = () => {
+            setTimeout(() => { if (progressEl) progressEl.style.display = 'none'; }, 1200);
+        };
+
+        showProgress(0, 'Preparing…');
+        const unlisten = await listen('ingest:progress', (e) => {
+            const { stage, current, total, docType } = e.payload;
+            const prefix = docType === 'cv' ? 'CV' : 'JD';
+            let pct = 5;
+            if (stage === 'embedding') pct = total > 0 ? 10 + Math.round((current / total) * 70) : 10;
+            else if (stage === 'upserting') pct = 85;
+            else if (stage === 'done') pct = 100;
+            showProgress(pct, `${prefix}: ${stageLabel[stage] || stage}`);
+        });
+
+        try {
+            const userId = this._getInterviewUserId();
+            const req = { userId };
+            if (this._interviewCvFile) {
+                const buf = await this._interviewCvFile.arrayBuffer();
+                req.cv = { filename: this._interviewCvFile.name, bytes: Array.from(new Uint8Array(buf)) };
+            }
+            if (this._interviewJdFile) {
+                const buf = await this._interviewJdFile.arrayBuffer();
+                req.jd = { filename: this._interviewJdFile.name, bytes: Array.from(new Uint8Array(buf)) };
+            }
+            const res = await invoke('ingest_interview_files', { req });
+            showProgress(100, 'Indexed');
+            this._showToast(res.message || 'Documents indexed', 'success');
+        } catch (e) {
+            if (progressEl) progressEl.style.display = 'none';
+            this._showToast(`Ingest failed: ${e}`, 'error');
+        } finally {
+            unlisten();
+            hideProgress();
+        }
+    }
+
+    _onInterviewSpeakerFinal(text) {
+        if (this.currentTemplate !== 'Interview') return;
+        const t = String(text || '').trim();
+        if (!t) return;
+        this._lastInterviewSuggestArgs = { transcriptContext: t, userDraft: null };
+        this._brainstormPending = true;
+        this._injectBrainstormButton();
+        (async () => {
+            try {
+                await invoke('save_interview_message', {
+                    req: { userId: this._getInterviewUserId(), role: 'speaker', content: t },
+                });
+            } catch (e) {
+                console.warn('[Interview] save speaker line', e);
+            }
+        })();
+    }
+
+    _injectBrainstormButton() {
+        if (!this._brainstormPending) return;
+        const content = document.getElementById('transcript-content');
+        if (!content) return;
+        // Remove any existing brainstorm button first
+        content.querySelectorAll('.seg-brainstorm-btn').forEach(el => el.remove());
+        // Support both view modes: subtitle-pair (subtitle view) and seg-block (single/dual view)
+        const pairs = content.querySelectorAll('.subtitle-pair:not(.pending), .seg-block');
+        const lastBlock = pairs[pairs.length - 1];
+        if (!lastBlock) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'seg-brainstorm-btn';
+        btn.title = 'Generate answer suggestions';
+        btn.innerHTML = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a7 7 0 0 1 7 7c0 2.5-1.3 4.7-3.3 6l-.7.5V17a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-1.5l-.7-.5A7 7 0 0 1 5 9a7 7 0 0 1 7-7z"/>
+            <line x1="9" y1="21" x2="15" y2="21"/>
+        </svg>`;
+        btn.addEventListener('click', () => {
+            this._brainstormPending = false;
+            btn.remove();
+            this._interviewSuggestionsClosed = false;
+            this._setRightPanelCollapsed(false);
+            const { transcriptContext, userDraft } = this._lastInterviewSuggestArgs || {};
+            this._markInterviewSuggestStart(transcriptContext ? 'speaker' : 'draft');
+            this._scheduleInterviewSuggestions({ transcriptContext, userDraft });
+        });
+        lastBlock.appendChild(btn);
+    }
+
+    _scheduleInterviewSuggestions({ transcriptContext, userDraft }) {
+        if (this.currentTemplate !== 'Interview') return;
+        // Manual mode: _markInterviewSuggestStart is called by the trigger button
+        this._lastInterviewSuggestArgs = {
+            transcriptContext: transcriptContext || null,
+            userDraft: userDraft || null,
+        };
+        clearTimeout(this._interviewSuggestTimer);
+        const gen = ++this._interviewSuggestGen;
+        this._interviewSuggestTimer = setTimeout(() => {
+            void this._runInterviewSuggestions(gen, { transcriptContext, userDraft });
+        }, 200);
+    }
+
+    _setInterviewSuggestionsStatus(text) {
+        const el = document.getElementById('interview-suggestions-status');
+        if (!el) return;
+        if (!text) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = '';
+        el.textContent = text;
+    }
+
+    _markInterviewSuggestStart(origin) {
+        this._cancelInterviewSuggestionsStreaming();
+        if (this._interviewSuggestPerf.hideTimer) {
+            clearTimeout(this._interviewSuggestPerf.hideTimer);
+            this._interviewSuggestPerf.hideTimer = null;
+        }
+        this._interviewSuggestPerf.origin = origin || null;
+        this._interviewSuggestPerf.t0 = performance.now();
+        if (this._interviewSuggestPerf.timer) clearInterval(this._interviewSuggestPerf.timer);
+        this._interviewSuggestPerf.timer = setInterval(() => {
+            const ms = performance.now() - this._interviewSuggestPerf.t0;
+            const s = (ms / 1000).toFixed(ms < 10_000 ? 1 : 0);
+            this._setInterviewSuggestionsStatus(`Generating… ${s}s`);
+        }, 100);
+        this._setInterviewSuggestionsStatus('Generating… 0.0s');
+    }
+
+    _markInterviewSuggestDone(ok) {
+        const t0 = this._interviewSuggestPerf.t0 || performance.now();
+        const ms = performance.now() - t0;
+        const s = (ms / 1000).toFixed(ms < 10_000 ? 1 : 0);
+        if (this._interviewSuggestPerf.timer) {
+            clearInterval(this._interviewSuggestPerf.timer);
+            this._interviewSuggestPerf.timer = null;
+        }
+        this._setInterviewSuggestionsStatus(ok ? `Done · ${s}s` : `Failed · ${s}s`);
+        this._interviewSuggestPerf.hideTimer = setTimeout(() => {
+            this._setInterviewSuggestionsStatus('');
+            this._interviewSuggestPerf.hideTimer = null;
+        }, 2500);
+    }
+
+    _cancelInterviewSuggestionsStreaming() {
+        const timers = this._interviewSuggestionsStream?.timers || [];
+        timers.forEach((t) => {
+            clearTimeout(t);
+            clearInterval(t);
+        });
+        this._interviewSuggestionsStream.timers = [];
+    }
+
+    _renderInterviewSuggestionsStream(items) {
+        // Renders list immediately (structure/buttons), then reveals text progressively.
+        this._cancelInterviewSuggestionsStreaming();
+        const t0 = this._interviewSuggestPerf.t0;
+        const ms = t0 ? performance.now() - t0 : 0;
+        const renderTime = ms > 0 ? (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + 's' : '';
+
+        const panel = document.getElementById('interview-suggestions-panel');
+        const list = document.getElementById('interview-suggestions-list');
+        if (!panel || !list) return;
+
+        const normalized = this._normalizeInterviewSuggestionItems(items);
+        this._interviewSuggestionsItems = normalized.slice();
+
+        if (this._interviewSuggestionsClosed) {
+            panel.style.display = '';
+            this._setRightPanelCollapsed(true);
+            return;
+        }
+        if (this.currentTemplate !== 'Interview') {
+            panel.style.display = 'none';
+            list.innerHTML = '';
+            this._undockInterviewSuggestions();
+            return;
+        }
+        if (!normalized.length) {
+            panel.style.display = '';
+            list.innerHTML = '';
+            this._dockInterviewSuggestionsRight();
+            this._setRightPanelCollapsed(true);
+            return;
+        }
+
+        this._setRightPanelCollapsed(false);
+        panel.style.display = '';
+        list.innerHTML = '';
+
+        const suggestionType = settingsManager.get().suggestion_type || 'translation';
+
+        const mkTypewriter = (btn, fullText) => {
+            const text = String(fullText || '');
+            btn.textContent = '';
+            const state = { i: 0 };
+            const tick = () => {
+                const chunk = text.slice(0, state.i);
+                btn.textContent = chunk;
+                if (state.i >= text.length) return false;
+                state.i = Math.min(text.length, state.i + Math.max(2, Math.ceil(text.length / 40)));
+                return true;
+            };
+            tick();
+            const interval = setInterval(() => {
+                if (!tick()) clearInterval(interval);
+            }, 30);
+            this._interviewSuggestionsStream.timers.push(interval);
+        };
+
+        normalized.forEach((item, idx) => {
+            const delay = idx * 120;
+            const t = setTimeout(() => {
+                if (suggestionType === 'both') {
+                    if (!item.target.trim() && !item.translation.trim()) return;
+                    const li = document.createElement('li');
+                    li.className = 'suggestion-chip-row';
+                    li.dataset.face = 'target';
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'suggestion-chip';
+
+                    const del = document.createElement('button');
+                    del.type = 'button';
+                    del.className = 'suggestion-chip-delete';
+                    del.title = 'Remove suggestion';
+                    del.setAttribute('aria-label', 'Remove suggestion');
+                    del.innerHTML = '×';
+                    del.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this._renderInterviewSuggestions(this._interviewSuggestionsItems.filter((it) => it.id !== item.id));
+                    });
+
+                    const toggle = document.createElement('button');
+                    toggle.type = 'button';
+                    toggle.className = 'suggestion-chip-lang';
+                    toggle.title = 'Switch language';
+                    toggle.setAttribute('aria-label', 'Switch language');
+                    toggle.innerHTML =
+                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>';
+                    toggle.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const nextFace = li.dataset.face === 'translation' ? 'target' : 'translation';
+                        li.dataset.face = nextFace;
+                        const full = this._suggestionFaceText(item, nextFace);
+                        mkTypewriter(btn, full);
+                    });
+
+                    btn.addEventListener('click', () => {
+                        const face = li.dataset.face === 'translation' ? 'translation' : 'target';
+                        const text = this._suggestionFaceText(item, face);
+                        if (!text.trim()) return;
+                        const ta = document.getElementById('chat-input');
+                        this._pickedSuggestion = { id: item.id, text };
+                        if (ta) this._insertIntoTextarea(ta, `${text} `);
+                    });
+
+                    const timeSpan = document.createElement('span');
+                    timeSpan.className = 'suggestion-chip-time';
+                    timeSpan.textContent = renderTime;
+
+                    li.appendChild(btn);
+                    li.appendChild(del);
+                    li.appendChild(timeSpan);
+                    li.appendChild(toggle);
+                    list.appendChild(li);
+
+                    mkTypewriter(btn, this._suggestionFaceText(item, 'target'));
+                    return;
+                }
+
+                const text = this._suggestionChipLabel(item, suggestionType);
+                if (!text.trim()) return;
+                const li = document.createElement('li');
+                li.className = 'suggestion-chip-row';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'suggestion-chip';
+                btn.addEventListener('click', () => {
+                    const ta = document.getElementById('chat-input');
+                    this._pickedSuggestion = { id: item.id, text };
+                    if (ta) this._insertIntoTextarea(ta, `${text} `);
+                });
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'suggestion-chip-delete';
+                del.title = 'Remove suggestion';
+                del.setAttribute('aria-label', 'Remove suggestion');
+                del.innerHTML = '×';
+                del.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this._renderInterviewSuggestions(this._interviewSuggestionsItems.filter((it) => it.id !== item.id));
+                });
+
+                const timeSpan = document.createElement('span');
+                timeSpan.className = 'suggestion-chip-time';
+                timeSpan.textContent = renderTime;
+
+                li.appendChild(btn);
+                li.appendChild(del);
+                li.appendChild(timeSpan);
+                list.appendChild(li);
+                mkTypewriter(btn, text);
+            }, delay);
+            this._interviewSuggestionsStream.timers.push(t);
+        });
+
+        this._dockInterviewSuggestionsRight();
+    }
+
+    async _runInterviewSuggestions(gen, { transcriptContext, userDraft }) {
+        if (gen !== this._interviewSuggestGen) return;
+        const panel = document.getElementById('interview-suggestions-panel');
+        try {
+            // If we didn't get a speaker/draft marker for some reason, start timing here.
+            if (!this._interviewSuggestPerf.t0) this._markInterviewSuggestStart(null);
+            const res = await invoke('suggest_interview_answers', {
+                req: {
+                    userId: this._getInterviewUserId(),
+                    transcriptContext: transcriptContext || null,
+                    userDraft: userDraft || null,
+                },
+            });
+            if (gen !== this._interviewSuggestGen) return;
+            this._renderInterviewSuggestionsStream(res.suggestions || []);
+            this._markInterviewSuggestDone(true);
+        } catch (e) {
+            console.warn('[Interview] suggest', e);
+            if (gen === this._interviewSuggestGen && panel) panel.style.display = 'none';
+            this._markInterviewSuggestDone(false);
+        }
+    }
+
+    _normalizeInterviewSuggestionItems(raw) {
+        const st = settingsManager.get().suggestion_type || 'translation';
+        if (!Array.isArray(raw)) return [];
+        return raw.map((x, i) => {
+            if (typeof x === 'string') {
+                if (st === 'translation') return { id: i, target: '', translation: x };
+                if (st === 'target') return { id: i, target: x, translation: '' };
+                return { id: i, target: x, translation: x };
+            }
+            const id = typeof x.id === 'number' ? x.id : i;
+            return {
+                id,
+                target: x.target != null ? String(x.target) : '',
+                translation: x.translation != null ? String(x.translation) : '',
+            };
+        });
+    }
+
+    _suggestionFaceText(item, face) {
+        return face === 'translation' ? item.translation : item.target;
+    }
+
+    _suggestionChipLabel(item, suggestionType) {
+        if (suggestionType === 'translation') return item.translation || item.target;
+        if (suggestionType === 'target') return item.target || item.translation;
+        return item.target || item.translation;
+    }
+
+    _renderInterviewSuggestions(items) {
+        const panel = document.getElementById('interview-suggestions-panel');
+        const list = document.getElementById('interview-suggestions-list');
+        if (!panel || !list) return;
+        const normalized = this._normalizeInterviewSuggestionItems(items);
+        this._interviewSuggestionsItems = normalized.slice();
+        if (this._interviewSuggestionsClosed) {
+            panel.style.display = '';
+            this._setRightPanelCollapsed(true);
+            return;
+        }
+        if (this.currentTemplate !== 'Interview') {
+            panel.style.display = 'none';
+            list.innerHTML = '';
+            this._undockInterviewSuggestions();
+            return;
+        }
+        if (!normalized.length) {
+            // Keep the panel rail visible in Interview mode even when there are no suggestions yet.
+            panel.style.display = '';
+            list.innerHTML = '';
+            this._dockInterviewSuggestionsRight();
+            this._setRightPanelCollapsed(true);
+            return;
+        }
+        this._setRightPanelCollapsed(false);
+        panel.style.display = '';
+        list.innerHTML = '';
+        const suggestionType = settingsManager.get().suggestion_type || 'translation';
+        normalized.forEach((item) => {
+            if (suggestionType === 'both') {
+                if (!item.target.trim() && !item.translation.trim()) return;
+                const li = document.createElement('li');
+                li.className = 'suggestion-chip-row';
+                li.dataset.face = 'target';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'suggestion-chip';
+                btn.textContent = this._suggestionFaceText(item, 'target');
+
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'suggestion-chip-delete';
+                del.title = 'Remove suggestion';
+                del.setAttribute('aria-label', 'Remove suggestion');
+                del.innerHTML = '×';
+                del.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this._renderInterviewSuggestions(this._interviewSuggestionsItems.filter((it) => it.id !== item.id));
+                });
+
+                const toggle = document.createElement('button');
+                toggle.type = 'button';
+                toggle.className = 'suggestion-chip-lang';
+                toggle.title = 'Switch language';
+                toggle.setAttribute('aria-label', 'Switch language');
+                toggle.innerHTML =
+                    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>';
+                toggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const nextFace = li.dataset.face === 'translation' ? 'target' : 'translation';
+                    li.dataset.face = nextFace;
+                    btn.textContent = this._suggestionFaceText(item, nextFace);
+                });
+                btn.addEventListener('click', () => {
+                    const face = li.dataset.face === 'translation' ? 'translation' : 'target';
+                    const text = this._suggestionFaceText(item, face);
+                    if (!text.trim()) return;
+                    const ta = document.getElementById('chat-input');
+                    this._pickedSuggestion = { id: item.id, text };
+                    if (ta) this._insertIntoTextarea(ta, `${text} `);
+                });
+                li.appendChild(btn);
+                li.appendChild(del);
+                li.appendChild(toggle);
+                list.appendChild(li);
+                return;
+            }
+            const text = this._suggestionChipLabel(item, suggestionType);
+            if (!text.trim()) return;
+            const li = document.createElement('li');
+            li.className = 'suggestion-chip-row';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'suggestion-chip';
+            btn.textContent = text;
+            btn.addEventListener('click', () => {
+                const ta = document.getElementById('chat-input');
+                this._pickedSuggestion = { id: item.id, text };
+                if (ta) this._insertIntoTextarea(ta, `${text} `);
+            });
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'suggestion-chip-delete';
+            del.title = 'Remove suggestion';
+            del.setAttribute('aria-label', 'Remove suggestion');
+            del.innerHTML = '×';
+            del.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._renderInterviewSuggestions(this._interviewSuggestionsItems.filter((it) => it.id !== item.id));
+            });
+            li.appendChild(btn);
+            li.appendChild(del);
+            list.appendChild(li);
+        });
+
+        // For Interview template, show suggestions in a split right panel (subtitle stays visible on the left).
+        this._dockInterviewSuggestionsRight();
     }
 }
 

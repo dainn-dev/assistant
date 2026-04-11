@@ -1,12 +1,12 @@
 [package]
-name = "my-translator"
-version = "0.5.1"
+name = "myjavis"
+version = "1.0.0"
 description = "Personal Real-time Speech Translator"
 authors = ["phucnt"]
 edition = "2021"
 
 [lib]
-name = "my_translator_lib"
+name = "myjavis_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -20,7 +20,7 @@ serde_json = "1"
 dirs = "6"
 chrono = "0.4"
 cpal = "0.15"
-reqwest = { version = "0.12", features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
@@ -29,6 +29,17 @@ http = "1"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
+keyring = "3"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+pdf-extract = "0.7"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+
+# Android: JNI bridge (MediaProjection system audio)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
 
 # macOS: ScreenCaptureKit for system audio
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -45,6 +56,7 @@ windows = { version = "0.58", features = [
   "Win32_System_Variant",
   "Win32_Foundation",
 ] }
+windows-core = "0.58"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2.10.0"
