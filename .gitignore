@@ -61,3 +61,7 @@ scripts/test_*.py
 .private/
 GEMINI.md
 CLAUDE.md
+
+# Secrets & local config
+.env
+.mcp.json

@@ -27,7 +27,7 @@
 
   --text-primary: rgba(255, 255, 255, 0.92);
   --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-muted: rgba(255, 255, 255, 0.35);
+  --text-muted: rgba(255, 255, 255, 0.45);
   --text-provisional: rgba(255, 255, 255, 0.4);
 
   --accent: #638cff;
@@ -287,6 +287,17 @@ body {
   font-weight: 500;
   color: var(--text-muted);
   letter-spacing: 0.02em;
+}
+
+.session-timer {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 /* Source Controls */
@@ -1417,18 +1428,18 @@ body {
 }
 
 .subtitle-bottom {
-  font-size: 0.9em;
-  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.82em;
+  color: rgba(255, 255, 255, 0.45);
   line-height: 1.4;
 }
 
 .subtitle-pair.pending .subtitle-top {
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.45);
+  font-style: italic;
 }
 
 .subtitle-pair.pending .subtitle-bottom {
-  color: rgba(255, 255, 255, 0.35);
-  font-style: italic;
+  color: rgba(255, 255, 255, 0.3);
 }
 
 .subtitle-speaker {
@@ -1732,7 +1743,7 @@ body {
 
 /* ─── Resize Handle ────────────────────────────────────── */
 #resize-handle {
-  height: 6px;
+  height: 12px;
   cursor: ns-resize;
   background: transparent;
   display: flex;

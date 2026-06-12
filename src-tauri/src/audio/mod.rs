@@ -10,6 +10,9 @@ pub mod system_audio;
 #[cfg(target_os = "windows")]
 pub mod wasapi;
 
+#[cfg(target_os = "linux")]
+pub mod linux_audio;
+
 // Re-export MicCapture per platform
 #[cfg(not(target_os = "android"))]
 pub use microphone::MicCapture;
@@ -27,11 +30,14 @@ pub use system_audio::SystemAudioCapture;
 #[cfg(target_os = "windows")]
 pub use wasapi::SystemAudioCapture;
 
-// Fallback stub for mobile / unsupported targets (Android/iOS/Linux).
-#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+pub use linux_audio::SystemAudioCapture;
+
+// Fallback stub for unsupported targets (iOS, etc.).
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub struct SystemAudioCapture;
 
-#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "windows", target_os = "linux")))]
 impl SystemAudioCapture {
     pub fn new() -> Self {
         Self

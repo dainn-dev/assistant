@@ -65,6 +65,7 @@ class App {
             timers: [],
         };
         this._brainstormPending = false;
+        this._sessionTimerInterval = null;
     }
 
     async init() {
@@ -1201,6 +1202,7 @@ class App {
         this._updateStartButton();
         this._updateControlsForMode();
         if (!this.recordingStartTime) this.recordingStartTime = Date.now();
+        this._startSessionTimer();
 
         // Record session metadata for auto-save
         if (!this.sessionStartTime) {
@@ -1585,6 +1587,7 @@ class App {
 
     async stop() {
         await this._stopCapture();
+        this._stopSessionTimer();
 
         // Auto-save on stop — use full sessionLog (not trimmed display buffer)
         if (this.transcriptUI.hasSessionContent()) {
@@ -1597,6 +1600,7 @@ class App {
     }
 
     _createNewSession() {
+        this._stopSessionTimer();
         this.readOnlyMode = false;
         this.activeConversationFilename = null;
         this.sessionActive = true;
@@ -1614,6 +1618,7 @@ class App {
 
     async _endSession() {
         await this._stopCapture();
+        this._stopSessionTimer();
 
         if (this.transcriptUI.hasSessionContent()) {
             await this._saveTranscriptFile();
@@ -1703,6 +1708,32 @@ class App {
             console.error('Failed to save transcript:', err);
             this._showToast('Failed to save transcript', 'error');
         }
+    }
+
+    // ─── Session Timer ─────────────────────────────────────
+
+    _startSessionTimer() {
+        this._stopSessionTimer();
+        const el = document.getElementById('session-timer');
+        if (!el) return;
+        el.style.display = '';
+        const update = () => {
+            const elapsed = Math.floor((Date.now() - this.recordingStartTime) / 1000);
+            const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+            const s = (elapsed % 60).toString().padStart(2, '0');
+            el.textContent = `${m}:${s}`;
+        };
+        update();
+        this._sessionTimerInterval = setInterval(update, 1000);
+    }
+
+    _stopSessionTimer() {
+        if (this._sessionTimerInterval) {
+            clearInterval(this._sessionTimerInterval);
+            this._sessionTimerInterval = null;
+        }
+        const el = document.getElementById('session-timer');
+        if (el) el.style.display = 'none';
     }
 
     // ─── Status ────────────────────────────────────────────

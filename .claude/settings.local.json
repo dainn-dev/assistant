@@ -19,7 +19,26 @@
       "Skill(update-config:*)",
       "Bash(cargo check:*)",
       "Bash(rustup show:*)",
-      "Bash(rustup target:*)"
+      "Bash(rustup target:*)",
+      "Skill(run)",
+      "Bash(cargo --version)",
+      "Bash(python3 -c \"import sys,json; p=json.load\\(sys.stdin\\); print\\(json.dumps\\(p.get\\('scripts',{}\\), indent=2\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; p=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:p[k] for k in list\\(p.keys\\(\\)\\)[:5]}, indent=2\\)\\)\")",
+      "Bash(grep -v \"\\\\.d$\\\\|deps\\\\|build\\\\|incremental\\\\|examples\")",
+      "Bash(dpkg -l libwebkit2gtk-4.1-dev libssl-dev build-essential)",
+      "Bash(awk '{print $2, $3}')",
+      "Bash(pkg-config --version)",
+      "Bash(dpkg -l libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev)",
+      "Bash(awk '{print $2}')",
+      "Bash(dpkg -l libwebkit2gtk-4.0-dev)",
+      "Bash(sudo apt-get update -qq)",
+      "Bash(sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-3-dev libsoup-3.0-dev javascriptcoregtk-4.1-dev libglib2.0-dev libpango1.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev libasound2-dev)",
+      "Bash(sh -s -- -y --no-modify-path)",
+      "Bash(dpkg -l libpulse-dev)",
+      "Bash(sudo apt-get install -y libpulse-dev)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "linear-dainndev"
+  ]
 }

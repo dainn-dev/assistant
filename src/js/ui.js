@@ -535,8 +535,8 @@ export class TranscriptUI {
                 lastRenderedSpeaker = c.speaker;
             }
             html += `<div class="subtitle-pair">
-                <div class="subtitle-top"><span class="subtitle-prefix">EN:</span> ${this._esc(c.en)}</div>
-                <div class="subtitle-bottom"><span class="subtitle-prefix">VI:</span> ${this._esc(c.vi)}</div>
+                <div class="subtitle-top"><span class="subtitle-prefix">VI:</span> ${this._esc(c.vi)}</div>
+                <div class="subtitle-bottom"><span class="subtitle-prefix">EN:</span> ${this._esc(c.en)}</div>
             </div>`;
         }
 
@@ -546,8 +546,8 @@ export class TranscriptUI {
                 lastRenderedSpeaker = pendingSpeaker;
             }
             html += `<div class="subtitle-pair pending">
-                <div class="subtitle-top"><span class="subtitle-prefix">EN:</span> ${this._esc(pendingEn)}</div>
-                <div class="subtitle-bottom"><span class="subtitle-prefix">VI:</span> …</div>
+                <div class="subtitle-top"><span class="subtitle-prefix">VI:</span> …</div>
+                <div class="subtitle-bottom"><span class="subtitle-prefix">EN:</span> ${this._esc(pendingEn)}</div>
             </div>`;
         }
 
