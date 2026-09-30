@@ -9,7 +9,7 @@ use tauri::{ipc::Channel, State};
 pub struct AudioState {
     pub system_audio: Mutex<SystemAudioCapture>,
     pub microphone: Mutex<MicCapture>,
-    pub active_receiver: Mutex<Option<AudioForwarder>>,
+    pub active_receiver: Mutex<Vec<AudioForwarder>>,
 }
 
 /// Forwards audio from a receiver to a Tauri IPC channel
@@ -108,7 +108,18 @@ pub fn start_capture(
         _ => return Err(format!("Unknown source: {}", source)),
     };
 
-    // Spawn a thread to forward audio data from receiver to IPC channel
+    register_forwarder(&state, receiver, move |data| {
+        channel.send(data).map_err(|_| ())
+    })?;
+    Ok(())
+}
+
+/// Spawn a batching forwarder thread: buffers PCM chunks and flushes every
+/// 200 ms or when the receiver disconnects / the stop flag fires.
+fn spawn_forwarder(
+    receiver: mpsc::Receiver<Vec<u8>>,
+    send: impl Fn(Vec<u8>) -> Result<(), ()> + Send + 'static,
+) -> AudioForwarder {
     let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_flag_clone = stop_flag.clone();
 
@@ -121,7 +132,7 @@ pub fn start_capture(
             if stop_flag_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 // Flush remaining buffer before exit
                 if !buffer.is_empty() {
-                    let _ = channel.send(buffer.clone());
+                    let _ = send(buffer.clone());
                 }
                 break;
             }
@@ -133,7 +144,7 @@ pub fn start_capture(
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     if !buffer.is_empty() {
-                        let _ = channel.send(buffer.clone());
+                        let _ = send(buffer.clone());
                     }
                     break;
                 }
@@ -141,7 +152,7 @@ pub fn start_capture(
 
             // Flush buffer every 200ms
             if last_flush.elapsed() >= batch_interval && !buffer.is_empty() {
-                if let Err(_e) = channel.send(buffer.clone()) {
+                if send(buffer.clone()).is_err() {
                     break; // Channel closed
                 }
                 buffer.clear();
@@ -150,13 +161,70 @@ pub fn start_capture(
         }
     });
 
-    // Store the forwarder so we can stop it later
-    let forwarder = AudioForwarder { stop_flag };
+    AudioForwarder { stop_flag }
+}
+
+/// Register a forwarder on the shared state so `stop_capture` can halt it.
+fn register_forwarder(
+    state: &AudioState,
+    receiver: mpsc::Receiver<Vec<u8>>,
+    send: impl Fn(Vec<u8>) -> Result<(), ()> + Send + 'static,
+) -> Result<(), String> {
+    let forwarder = spawn_forwarder(receiver, send);
     let mut active = state
         .active_receiver
         .lock()
         .map_err(|_| "Lock error".to_string())?;
-    *active = Some(forwarder);
+    active.push(forwarder);
+    Ok(())
+}
+
+/// Start System Audio and Microphone captures on separate IPC channels.
+///
+/// Unlike `start_capture("both")`, the two PCM streams are never merged, so
+/// the frontend can feed two independent recognition clients and always know
+/// which physical source produced which transcript.
+#[tauri::command]
+pub fn start_split_capture(
+    system_channel: Channel<Vec<u8>>,
+    mic_channel: Channel<Vec<u8>>,
+    state: State<'_, AudioState>,
+) -> Result<(), String> {
+    // Stop any existing capture first
+    stop_capture_inner(&state);
+
+    let sys_rx = {
+        let sys = state
+            .system_audio
+            .lock()
+            .map_err(|_| "Lock error".to_string())?;
+        sys.start().map_err(|e| format!("system audio: {}", e))?
+    };
+
+    let mic_rx = {
+        let mut mic = state
+            .microphone
+            .lock()
+            .map_err(|_| "Lock error".to_string())?;
+        match mic.start() {
+            Ok(rx) => rx,
+            Err(e) => {
+                // Roll back the already-started system capture so a retry
+                // doesn't fight a dangling loopback stream.
+                if let Ok(sys) = state.system_audio.lock() {
+                    sys.stop();
+                }
+                return Err(format!("microphone: {}", e));
+            }
+        }
+    };
+
+    register_forwarder(&state, sys_rx, move |data| {
+        system_channel.send(data).map_err(|_| ())
+    })?;
+    register_forwarder(&state, mic_rx, move |data| {
+        mic_channel.send(data).map_err(|_| ())
+    })?;
 
     Ok(())
 }
@@ -169,9 +237,9 @@ pub fn stop_capture(state: State<'_, AudioState>) -> Result<(), String> {
 }
 
 fn stop_capture_inner(state: &AudioState) {
-    // Stop the forwarder
+    // Stop all active forwarders
     if let Ok(mut active) = state.active_receiver.lock() {
-        if let Some(forwarder) = active.take() {
+        for forwarder in active.drain(..) {
             forwarder.stop();
         }
     }
@@ -239,5 +307,28 @@ pub fn check_permissions() -> PermissionStatus {
             screen_recording: "unknown".to_string(),
             microphone,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_capture_registers_two_forwarders() {
+        let (_tx1, rx1) = mpsc::channel::<Vec<u8>>();
+        let (_tx2, rx2) = mpsc::channel::<Vec<u8>>();
+        let state = AudioState {
+            system_audio: Mutex::new(SystemAudioCapture::new()),
+            microphone: Mutex::new(MicCapture::new()),
+            active_receiver: Mutex::new(Vec::new()),
+        };
+
+        register_forwarder(&state, rx1, |_| Ok(())).unwrap();
+        register_forwarder(&state, rx2, |_| Ok(())).unwrap();
+        assert_eq!(state.active_receiver.lock().unwrap().len(), 2);
+
+        stop_capture_inner(&state);
+        assert!(state.active_receiver.lock().unwrap().is_empty());
     }
 }
