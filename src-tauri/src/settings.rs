@@ -152,7 +152,7 @@ impl Default for Settings {
             llm_api_key: String::new(),
             pinecone_api_key: String::new(),
             suggestion_type: "translation".to_string(),
-            app_mode: "Interview".to_string(),
+            app_mode: String::new(),
             early_suggestions: false,
         }
     }
@@ -342,6 +342,8 @@ mod tests {
         assert!(!s.language_hints_strict);
         assert_eq!(s.endpoint_delay, 3000);
         assert!(s.soniox_api_key.is_empty());
+        assert_eq!(s.app_mode, "");
+        assert!(!s.early_suggestions);
     }
 
     /// Keys must never be serialized into settings.json.
