@@ -520,5 +520,8 @@ export class SonioxClient {
     }
 }
 
-// Singleton
+// Singletons — one WebSocket session per client. In split-capture mode the
+// system client carries the interviewer and the mic client carries the
+// candidate, so the two audio sources keep separate recognition streams.
 export const sonioxClient = new SonioxClient();
+export const sonioxMicClient = new SonioxClient();

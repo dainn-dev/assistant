@@ -2,7 +2,7 @@
 // Extracted from app.js — methods are merged onto App.prototype via Object.assign.
 
 import { settingsManager } from './settings.js';
-import { sonioxClient } from './soniox.js';
+import { sonioxClient, sonioxMicClient } from './soniox.js';
 import { elevenLabsTTS } from './elevenlabs-tts.js';
 import { edgeTTSRust } from './edge-tts.js';
 import { audioPlayer } from './audio-player.js';
@@ -274,7 +274,7 @@ export const sessionMethods = {
         // Connect to Soniox
         console.log('[App] Connecting to Soniox...');
         this._updateStatus('connecting');
-        sonioxClient.connect({
+        const sonioxConfig = {
             apiKey: settings.soniox_api_key,
             sourceLanguage: settings.source_language,
             targetLanguage: settings.target_language,
@@ -284,7 +284,16 @@ export const sessionMethods = {
             languageB: settings.language_b,
             languageHintsStrict: settings.language_hints_strict || false,
             endpointDelay: settings.endpoint_delay || 3000,
-        });
+        };
+        sonioxClient.connect(sonioxConfig);
+
+        // Split mode: Interview/Meeting + System&Mic keeps the two audio
+        // sources on independent recognition streams so the app always knows
+        // who is speaking (system = interviewer, mic = candidate).
+        const useSplit = this.currentSource === 'both' && this._isSuggestionsMode();
+        if (useSplit) {
+            sonioxMicClient.connect(sonioxConfig);
+        }
 
         // If system audio is selected, request MediaProjection first (no-op on desktop).
         try {
@@ -292,29 +301,78 @@ export const sessionMethods = {
                 await invoke('request_media_projection');
             }
 
-            let audioChunkCount = 0;
+            if (useSplit) {
+                await this._startSplitCapture();
+            } else {
+                let audioChunkCount = 0;
 
-            const channel = new window.__TAURI__.core.Channel();
-            channel.onmessage = (pcmData) => {
-                audioChunkCount++;
-                if (audioChunkCount <= 3 || audioChunkCount % 50 === 0) {
-                    console.log(`[Audio] Batch #${audioChunkCount}, size:`, pcmData?.length || 0);
-                }
-                // Forward batched audio to Soniox
-                const bytes = new Uint8Array(pcmData);
-                sonioxClient.sendAudio(bytes.buffer);
-            };
+                const channel = new window.__TAURI__.core.Channel();
+                channel.onmessage = (pcmData) => {
+                    audioChunkCount++;
+                    if (audioChunkCount <= 3 || audioChunkCount % 50 === 0) {
+                        console.log(`[Audio] Batch #${audioChunkCount}, size:`, pcmData?.length || 0);
+                    }
+                    // Forward batched audio to Soniox
+                    const bytes = new Uint8Array(pcmData);
+                    sonioxClient.sendAudio(bytes.buffer);
+                };
 
-            console.log('[App] Starting audio capture, source:', this.currentSource);
-            await invoke('start_capture', {
-                source: this.currentSource,
-                channel: channel,
-            });
-            console.log('[App] Audio capture started successfully');
+                console.log('[App] Starting audio capture, source:', this.currentSource);
+                await invoke('start_capture', {
+                    source: this.currentSource,
+                    channel: channel,
+                });
+                console.log('[App] Audio capture started successfully');
+            }
         } catch (err) {
             console.error('Failed to start audio capture:', err);
             this._showToast(`Audio error: ${err}`, 'error');
             await this.stop();
+        }
+    }
+,
+
+
+    // Split capture: two Rust IPC channels → two Soniox clients. System audio
+    // → sonioxClient (primary), mic → sonioxMicClient. If the mic side fails
+    // after system is running, we keep going on system-only with a visible
+    // warning rather than tearing down the whole session.
+    async _startSplitCapture() {
+        const systemChannel = new window.__TAURI__.core.Channel();
+        systemChannel.onmessage = (pcmData) => {
+            const bytes = new Uint8Array(pcmData);
+            sonioxClient.sendAudio(bytes.buffer);
+        };
+
+        const micChannel = new window.__TAURI__.core.Channel();
+        micChannel.onmessage = (pcmData) => {
+            const bytes = new Uint8Array(pcmData);
+            sonioxMicClient.sendAudio(bytes.buffer);
+        };
+
+        try {
+            console.log('[App] Starting split capture (system + mic channels)');
+            await invoke('start_split_capture', {
+                systemChannel,
+                micChannel,
+            });
+            console.log('[App] Split capture started successfully');
+        } catch (err) {
+            // Rust rolls back system capture when mic fails; if the error names
+            // the mic, degrade to system-only so the interviewer side still works.
+            if (typeof err === 'string' && err.startsWith('microphone')) {
+                console.warn('[App] Mic capture failed, falling back to system-only:', err);
+                sonioxMicClient.disconnect();
+                this._micDegraded = true;
+                try {
+                    await invoke('start_capture', { source: 'system', channel: systemChannel });
+                    this._showToast('Mic unavailable — interview stream only; auto-hold disabled', 'error');
+                    return;
+                } catch (sysErr) {
+                    throw sysErr;
+                }
+            }
+            throw err;
         }
     }
 ,
@@ -616,6 +674,8 @@ export const sessionMethods = {
             this._updateStatus('disconnected');
         } else {
             sonioxClient.disconnect();
+            sonioxMicClient.disconnect();
+            this._micDegraded = false;
         }
 
         // Promote in-flight provisional text before clearing — provisional

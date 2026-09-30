@@ -10,26 +10,30 @@ export const interviewPanelMethods = {
 
     _isSuggestionsMode() {
         return this.currentTemplate === 'Interview' || this.currentTemplate === 'Meeting';
-    },
+    }
+,
 
 
     _suggestionsPanelTitle() {
         return this.currentTemplate === 'Meeting' ? 'Suggestions' : 'Suggested answers';
-    },
+    }
+,
 
 
     _suggestionsEmptyText() {
         return this.currentTemplate === 'Meeting'
             ? 'Waiting for conversation context…'
             : 'Waiting for interviewer question…';
-    },
+    }
+,
 
 
     _updateSuggestionsPanelChrome() {
         const title = document.getElementById('interview-suggestions-title');
         if (title) title.textContent = this._suggestionsPanelTitle();
         this._updateSuggestionsEmptyState();
-    },
+    }
+,
 
 
     _updateSuggestionsEmptyState() {
@@ -40,7 +44,8 @@ export const interviewPanelMethods = {
             && !this._interviewSuggestionsClosed;
         empty.textContent = this._suggestionsEmptyText();
         empty.hidden = !show;
-    },
+    }
+,
 
 
     _clearSuggestionsPanel() {
@@ -56,7 +61,8 @@ export const interviewPanelMethods = {
         this._setInterviewSuggestionsStatus('');
         document.getElementById('transcript-content')?.querySelectorAll('.seg-brainstorm-btn').forEach((el) => el.remove());
         this._updateSuggestionsEmptyState();
-    },
+    }
+,
 
 
     _suggestionKindLabel(kind) {
@@ -66,7 +72,8 @@ export const interviewPanelMethods = {
             action_item: 'Action Item',
         };
         return labels[kind] || '';
-    },
+    }
+,
 
 
     _prependSuggestionKindLabel(li, item) {
@@ -77,7 +84,8 @@ export const interviewPanelMethods = {
         el.className = 'suggestion-chip-kind';
         el.textContent = label;
         li.insertBefore(el, li.firstChild);
-    },
+    }
+,
 
 
     _setTemplateMode(mode) {
@@ -128,7 +136,8 @@ export const interviewPanelMethods = {
             }
         }
         this._updateChatInputState();
-    },
+    }
+,
 
 
     _dockInterviewSuggestionsRight() {
@@ -156,7 +165,8 @@ export const interviewPanelMethods = {
         this._suggestionsDock.docked = true;
 
         this._initRightPanelResizer();
-    },
+    }
+,
 
 
     _initRightPanelResizer() {
@@ -194,7 +204,8 @@ export const interviewPanelMethods = {
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
         });
-    },
+    }
+,
 
 
     _setRightPanelCollapsed(collapsed) {
@@ -206,7 +217,8 @@ export const interviewPanelMethods = {
         contentArea.classList.toggle('right-panel-collapsed', this._rightPanelCollapsed);
         btnOpen.style.display = this._rightPanelCollapsed ? '' : 'none';
         btnClose.style.display = this._rightPanelCollapsed ? 'none' : '';
-    },
+    }
+,
 
 
     _setMobileSheetOpen(open) {
@@ -218,7 +230,8 @@ export const interviewPanelMethods = {
             document.body.classList.remove('sidebar-open');
             document.getElementById('sidebar')?.classList.add('hidden');
         }
-    },
+    }
+,
 
 
     _undockInterviewSuggestions() {
@@ -243,13 +256,15 @@ export const interviewPanelMethods = {
         right.style.display = 'none';
         contentArea.classList.remove('split-suggestions');
         this._suggestionsDock.docked = false;
-    },
+    }
+,
 
 
     _isAllowedInterviewFile(filename) {
         const name = String(filename || '').toLowerCase();
         return name.endsWith('.pdf') || name.endsWith('.docx');
-    },
+    }
+,
 
 
     _updateInterviewUploadPills() {
@@ -277,7 +292,8 @@ export const interviewPanelMethods = {
                 pillJd.style.display = 'none';
             }
         }
-    },
+    }
+,
 
 
     _initInterviewUploads() {
@@ -350,7 +366,8 @@ export const interviewPanelMethods = {
         });
 
         this._updateInterviewUploadPills();
-    },
+    }
+,
 
 
     _initTemplateDropdown() {
@@ -398,7 +415,8 @@ export const interviewPanelMethods = {
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') setOpen(false);
         });
-    },
+    }
+,
 
 
     _sendChatMessage() {
@@ -426,7 +444,8 @@ export const interviewPanelMethods = {
                 this._scheduleSuggestions({ transcriptContext: null, userDraft: text });
             })();
         }
-    },
+    }
+,
 
 
     _consumePickedSuggestion(sentText) {
@@ -439,7 +458,8 @@ export const interviewPanelMethods = {
         if (next.length === this._interviewSuggestionsItems.length) return;
 
         this._renderInterviewSuggestions(next);
-    },
+    }
+,
 
 
     _getInterviewUserId() {
@@ -450,7 +470,8 @@ export const interviewPanelMethods = {
             localStorage.setItem(KEY, id);
         }
         return id;
-    },
+    }
+,
 
 
     _scheduleInterviewIngest() {
@@ -458,7 +479,8 @@ export const interviewPanelMethods = {
         if (!this._interviewCvFile && !this._interviewJdFile) return;
         clearTimeout(this._ingestInterviewDebounce);
         this._ingestInterviewDebounce = setTimeout(() => void this._ingestInterviewFilesNow(), 500);
-    },
+    }
+,
 
 
     async _ingestInterviewFilesNow() {
@@ -511,11 +533,18 @@ export const interviewPanelMethods = {
             unlisten();
             hideProgress();
         }
-    },
+    }
+,
 
 
-    _onInterviewSpeakerFinal(text) {
+    _onInterviewSpeakerFinal(text, source = 'system') {
         if (!this._isSuggestionsMode()) return;
+        // The candidate's own mic speech is context for the scheduler, never a
+        // trigger for a new suggestion round.
+        if (source === 'mic') {
+            this._onCandidateSpeechFinal?.(text);
+            return;
+        }
         const t = String(text || '').trim();
         if (!t) return;
         this._lastInterviewSuggestArgs = { transcriptContext: t, userDraft: null };
@@ -532,7 +561,8 @@ export const interviewPanelMethods = {
                 }
             })();
         }
-    },
+    }
+,
 
 
     _injectBrainstormButton() {
@@ -563,7 +593,8 @@ export const interviewPanelMethods = {
             this._scheduleSuggestions({ transcriptContext, userDraft });
         });
         lastBlock.appendChild(btn);
-    },
+    }
+,
 
 
     _scheduleSuggestions({ transcriptContext, userDraft }) {
@@ -578,7 +609,8 @@ export const interviewPanelMethods = {
         this._interviewSuggestTimer = setTimeout(() => {
             void this._runInterviewSuggestions(gen, { transcriptContext, userDraft });
         }, 200);
-    },
+    }
+,
 
 
     _setInterviewSuggestionsStatus(text) {
@@ -591,7 +623,8 @@ export const interviewPanelMethods = {
         }
         el.style.display = '';
         el.textContent = text;
-    },
+    }
+,
 
 
     _markInterviewSuggestStart(origin) {
@@ -609,7 +642,8 @@ export const interviewPanelMethods = {
             this._setInterviewSuggestionsStatus(`Generating… ${s}s`);
         }, 100);
         this._setInterviewSuggestionsStatus('Generating… 0.0s');
-    },
+    }
+,
 
 
     _markInterviewSuggestDone(ok) {
@@ -625,7 +659,8 @@ export const interviewPanelMethods = {
             this._setInterviewSuggestionsStatus('');
             this._interviewSuggestPerf.hideTimer = null;
         }, 2500);
-    },
+    }
+,
 
 
     _cancelInterviewSuggestionsStreaming() {
@@ -635,7 +670,8 @@ export const interviewPanelMethods = {
             clearInterval(t);
         });
         this._interviewSuggestionsStream.timers = [];
-    },
+    }
+,
 
 
     _renderInterviewSuggestionsStream(items) {
@@ -799,7 +835,8 @@ export const interviewPanelMethods = {
         });
 
         this._dockInterviewSuggestionsRight();
-    },
+    }
+,
 
 
     async _runInterviewSuggestions(gen, { transcriptContext, userDraft }) {
@@ -824,7 +861,8 @@ export const interviewPanelMethods = {
             if (gen === this._interviewSuggestGen) this._updateSuggestionsEmptyState();
             this._markInterviewSuggestDone(false);
         }
-    },
+    }
+,
 
 
     _normalizeInterviewSuggestionItems(raw) {
@@ -846,19 +884,22 @@ export const interviewPanelMethods = {
                     : (x.suggestion_kind != null ? String(x.suggestion_kind) : 'answer'),
             };
         });
-    },
+    }
+,
 
 
     _suggestionFaceText(item, face) {
         return face === 'translation' ? item.translation : item.target;
-    },
+    }
+,
 
 
     _suggestionChipLabel(item, suggestionType) {
         if (suggestionType === 'translation') return item.translation || item.target;
         if (suggestionType === 'target') return item.target || item.translation;
         return item.target || item.translation;
-    },
+    }
+,
 
 
     _renderInterviewSuggestions(items) {
@@ -973,6 +1014,7 @@ export const interviewPanelMethods = {
 
         // For Interview/Meeting template, show suggestions in a split right panel (subtitle stays visible on the left).
         this._dockInterviewSuggestionsRight();
-    },
+    }
+,
 
 };

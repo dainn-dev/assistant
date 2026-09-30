@@ -5,7 +5,7 @@
 
 import { settingsManager } from './settings.js';
 import { TranscriptUI } from './ui.js';
-import { sonioxClient } from './soniox.js';
+import { sonioxClient, sonioxMicClient } from './soniox.js';
 import { elevenLabsTTS } from './elevenlabs-tts.js';
 import { googleTTS } from './google-tts.js';
 import { edgeTTSRust } from './edge-tts.js';
@@ -515,36 +515,57 @@ class App {
             this._toggleTTS();
         });
 
-        // Wire Soniox callbacks
-        sonioxClient.onOriginal = (text, speaker, language) => {
-            this.transcriptUI.addOriginal(text, speaker, language);
+        // Wire Soniox callbacks — the system client is the primary stream
+        // (interviewer). The mic client only feeds recognition of the
+        // candidate's own speech in split-capture mode; it never triggers
+        // suggestions and never drives the main status dot.
+        this._sourceClients = { system: sonioxClient, mic: sonioxMicClient };
+        this._wireSonioxClient(sonioxClient, 'system');
+        this._wireSonioxClient(sonioxMicClient, 'mic');
+    }
+
+    _wireSonioxClient(client, source) {
+        const isPrimary = source === 'system';
+
+        client.onOriginal = (text, speaker, language) => {
+            this.transcriptUI.addOriginal(text, speaker, language, source);
         };
 
-        sonioxClient.onTranslation = (text) => {
-            this.transcriptUI.addTranslation(text);
-            this._speakIfEnabled(text);
-            this._onInterviewSpeakerFinal(text);
+        client.onTranslation = (text) => {
+            this.transcriptUI.addTranslation(text, source);
+            if (isPrimary) {
+                this._speakIfEnabled(text);
+            }
+            this._onInterviewSpeakerFinal(text, source);
         };
 
-        sonioxClient.onProvisional = (text, speaker, language) => {
+        client.onProvisional = (text, speaker, language) => {
             if (text) {
-                this._brainstormPending = false;
-                this.transcriptUI.setProvisional(text, speaker, language);
+                if (isPrimary) this._brainstormPending = false;
+                this.transcriptUI.setProvisional(text, speaker, language, source);
             } else {
-                this.transcriptUI.clearProvisional();
+                this.transcriptUI.clearProvisional(source);
             }
         };
 
-        sonioxClient.onStatusChange = (status) => {
-            this._updateStatus(status);
+        client.onStatusChange = (status) => {
+            if (isPrimary) {
+                this._updateStatus(status);
+            } else if (status === 'error' && this.isRunning) {
+                this._showToast('Mic stream lost — auto-hold unavailable', 'error');
+            }
         };
 
-        sonioxClient.onError = (error) => {
-            this._showToast(error, 'error');
+        client.onError = (error) => {
+            if (isPrimary) {
+                this._showToast(error, 'error');
+            } else if (typeof error === 'string' && !error.startsWith('Reconnecting')) {
+                this._showToast(`Mic: ${error}`, 'error');
+            }
         };
 
-        sonioxClient.onConfidence = (avgConfidence) => {
-            this.transcriptUI.setConfidence(avgConfidence);
+        client.onConfidence = (avgConfidence) => {
+            if (isPrimary) this.transcriptUI.setConfidence(avgConfidence);
         };
     }
 
