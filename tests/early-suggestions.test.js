@@ -178,5 +178,29 @@ describe('EarlyScheduler', () => {
         s.observe(longer, 'system');
         expect(fired).toHaveLength(2);
     });
+
+    test('stale requestDone for an unknown id is a no-op', () => {
+        const { s, fired } = makeSched();
+        s.observe(Q, 'system');
+        s.observe(Q, 'system');
+        expect(fired).toHaveLength(1);
+        s.requestDone(999);                      // not the in-flight id
+        expect(s.inFlightId).toBe(1);            // still tracked
+    });
+
+    test('bumpEpoch cancels in-flight and drops pending', () => {
+        const { s, fired, cancelled } = makeSched();
+        s.observe(Q, 'system');
+        s.observe(Q, 'system');
+        const longer = Q + ' extra';
+        s.observe(longer, 'system');
+        s.observe(longer, 'system');             // queued as pending
+        const epochBefore = s.epoch;
+        s.bumpEpoch();
+        expect(cancelled).toEqual([1]);
+        expect(s.epoch).toBe(epochBefore + 1);
+        expect(s.inFlightId).toBeNull();
+        expect(s.pendingSnapshot).toBeNull();
+    });
 });
 
