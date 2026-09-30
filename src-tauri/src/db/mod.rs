@@ -144,3 +144,18 @@ pub fn upsert_document(
     .map_err(|e| format!("insert document: {e}"))?;
     Ok(())
 }
+
+/// All ingested documents for a user — (doc_type, extracted_text).
+pub fn get_documents(conn: &Connection, user_id: &str) -> Result<Vec<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT doc_type, extracted_text FROM documents WHERE user_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![user_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}

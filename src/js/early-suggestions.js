@@ -224,16 +224,26 @@ export const earlySuggestionMethods = {
         const holdBtn = document.getElementById('btn-early-hold');
         if (holdBtn && this._earlyHold === 'none') holdBtn.style.display = '';
 
-        invoke('suggest_interview_answers_stream', {
-            req: {
-                userId: this._getInterviewUserId(),
-                transcriptContext: snapshot,
-                userDraft: null,
-                appMode: 'Interview',
-                contextSnippets: this._earlyContextSnippets || [],
-            },
-            requestId,
-            channel,
+        // Pre-fetch lexical excerpts — a local sqlite read, far cheaper than
+        // the embed+Pinecone path the manual suggestion flow uses.
+        invoke('select_context_excerpts', {
+            userId: this._getInterviewUserId(),
+            query: snapshot,
+            maxChars: 3000,
+        }).then((excerpts) => {
+            if (!this._earlyRequestTurn.has(requestId)) return; // cancelled meanwhile
+            const snippets = (excerpts || []).map((e) => `[${e.docType}] ${e.text}`);
+            return invoke('suggest_interview_answers_stream', {
+                req: {
+                    userId: this._getInterviewUserId(),
+                    transcriptContext: snapshot,
+                    userDraft: null,
+                    appMode: 'Interview',
+                    contextSnippets: snippets,
+                },
+                requestId,
+                channel,
+            });
         }).catch((e) => {
             this._earlyRequestTurn.delete(requestId);
             if (this._early.inFlightId === requestId) this._early.requestDone(requestId);

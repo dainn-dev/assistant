@@ -95,6 +95,7 @@ pub fn run() {
             commands::interview::suggest_interview_answers,
             commands::interview::suggest_interview_answers_stream,
             commands::interview::cancel_suggestion_stream,
+            commands::interview::select_context_excerpts,
             get_platform_info,
         ])
         .run(tauri::generate_context!())

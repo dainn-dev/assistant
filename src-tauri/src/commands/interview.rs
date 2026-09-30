@@ -137,6 +137,14 @@ impl Default for SuggestStreamState {
     }
 }
 
+/// One document excerpt tagged by its source document kind.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextExcerpt {
+    pub doc_type: String,
+    pub text: String,
+}
+
 /// Events pushed to the frontend over the request's IPC channel.
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1052,6 +1060,66 @@ Interviewer's question / task focus:\n\
     Ok(SuggestInterviewAnswersResponse { suggestions, debug })
 }
 
+/// Lexical relevance score: normalized token-overlap count between the query
+/// and a document chunk. Cheap enough to run on every early-hint request —
+/// no embeddings, no network.
+fn score_excerpt(query: &str, chunk: &str) -> usize {
+    let chunk_lower = chunk.to_lowercase();
+    query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.len() >= 3)
+        .filter(|t| chunk_lower.contains(*t))
+        .count()
+}
+
+/// Pick the most query-relevant CV/JD excerpts for the early-hint path —
+/// lexical scoring over the locally stored document text, keeping the doc
+/// boundary (cv/jd) so the prompt never presents a job requirement as the
+/// candidate's own experience.
+#[tauri::command]
+pub fn select_context_excerpts(
+    db: State<'_, InterviewDb>,
+    user_id: String,
+    query: String,
+    max_chars: usize,
+) -> Result<Vec<ContextExcerpt>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let docs = db::get_documents(&conn, &user_id)?;
+    let budget = if max_chars == 0 { 3000 } else { max_chars };
+
+    let mut scored: Vec<(usize, String, String)> = Vec::new();
+    for (doc_type, text) in docs {
+        for chunk in
+            chunk_text_with_overlap(&text, INGEST_CHUNK_MAX_CHARS, INGEST_CHUNK_OVERLAP_CHARS)
+        {
+            scored.push((score_excerpt(&query, &chunk), doc_type.clone(), chunk));
+        }
+    }
+    // Highest overlap first; stable order keeps deterministic picks on ties.
+    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    let mut out = Vec::new();
+    let mut used = 0usize;
+    for (score, doc_type, chunk) in scored {
+        if score == 0 && !out.is_empty() {
+            break; // ranked hits exhausted — no padding with irrelevant chunks
+        }
+        if used + chunk.len() > budget && !out.is_empty() {
+            continue;
+        }
+        used += chunk.len();
+        out.push(ContextExcerpt {
+            doc_type,
+            text: chunk,
+        });
+        if used >= budget {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// Abort an in-flight suggestion stream. Unknown/stale request ids are
 /// no-ops so a late cancel can never kill a newer request.
 #[tauri::command]
@@ -1285,5 +1353,16 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].translation, "x");
         assert_eq!(items[0].target, "");
+    }
+
+    #[test]
+    fn score_excerpt_ranks_relevant_chunk_higher() {
+        let relevant = "Debugged a production deadlock by ordering lock acquisition";
+        let unrelated = "Built a landing page with React and Tailwind";
+        assert!(
+            score_excerpt("deadlock transaction retry", relevant)
+                > score_excerpt("deadlock transaction retry", unrelated)
+        );
+        assert_eq!(score_excerpt("", relevant), 0);
     }
 }
