@@ -681,12 +681,10 @@ export const sessionMethods = {
         // Promote in-flight provisional text before clearing — provisional
         // words never reach sessionLog, so a short capture would otherwise
         // silently lose what was on screen.
-        if (this.transcriptUI.provisionalText?.trim()) {
-            this.transcriptUI.addOriginal(
-                this.transcriptUI.provisionalText,
-                this.transcriptUI.provisionalSpeaker,
-                this.transcriptUI.provisionalLanguage,
-            );
+        for (const [source, slot] of Object.entries(this.transcriptUI.provisionalBySource)) {
+            if (slot.text?.trim()) {
+                this.transcriptUI.addOriginal(slot.text, slot.speaker, slot.language, source);
+            }
         }
         this.transcriptUI.clearProvisional();
 

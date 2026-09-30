@@ -18,18 +18,31 @@ export class TranscriptUI {
         this.fontSize = 16;
         this.viewMode = 'subtitle'; // 'single' | 'dual' | 'subtitle'
 
-        // Segments: each has { original, translation, status, speaker, language, confidence }
+        // Segments: each has { id, original, translation, status, speaker, language, confidence, source }
+        // source: 'system' (interviewer) | 'mic' (candidate) | null (legacy/chat)
         this.segments = [];
         // sessionLog: parallel array — never trimmed, holds complete session history
         this.sessionLog = [];
-        this.provisionalText = '';
-        this.provisionalSpeaker = null;
-        this.provisionalLanguage = null;
+        this._nextSegId = 1;
+        // Provisional (in-progress) recognition tail, tracked per source so a
+        // mic partial never overwrites the interviewer line being shown.
+        this.provisionalBySource = {
+            system: { text: '', speaker: null, language: null },
+            mic: { text: '', speaker: null, language: null },
+        };
         this.currentSpeaker = null; // Track current speaker to detect changes
         this.currentLanguage = null; // Track current language to detect changes
         this.lastConfidence = null; // Last confidence score from Soniox
         this.onChange = null; // () => void — fired when sessionLog grows (segment finalized)
     }
+
+    // Back-compat getters — all existing callers read the system stream.
+    get provisionalText() { return this.provisionalBySource.system.text; }
+    set provisionalText(v) { this.provisionalBySource.system.text = v; }
+    get provisionalSpeaker() { return this.provisionalBySource.system.speaker; }
+    set provisionalSpeaker(v) { this.provisionalBySource.system.speaker = v; }
+    get provisionalLanguage() { return this.provisionalBySource.system.language; }
+    set provisionalLanguage(v) { this.provisionalBySource.system.language = v; }
 
     /**
      * Update display settings
@@ -60,28 +73,22 @@ export class TranscriptUI {
     /**
      * Add finalized original text (pending translation)
      */
-    addOriginal(text, speaker, language) {
+    addOriginal(text, speaker, language, source = null) {
         this._removeListening();
         const seg = {
+            id: this._nextSegId++,
             original: text,
             translation: null,
             status: 'original',
             speaker: speaker || null,
             language: language || null,
             confidence: this.lastConfidence,
+            source: source || null,
             createdAt: Date.now(),
         };
         this.segments.push(seg);
         // Also push a separate copy to sessionLog (never trimmed)
-        this.sessionLog.push({
-            original: text,
-            translation: null,
-            status: 'original',
-            speaker: speaker || null,
-            language: language || null,
-            confidence: this.lastConfidence,
-            createdAt: seg.createdAt,
-        });
+        this.sessionLog.push({ ...seg });
         if (speaker) this.currentSpeaker = speaker;
         if (language) this.currentLanguage = language;
         this._cleanupStaleOriginals();
@@ -90,27 +97,33 @@ export class TranscriptUI {
     }
 
     /**
-     * Apply translation to the oldest untranslated segment
+     * Apply translation to the oldest untranslated segment of that source.
+     * Falls back to the oldest untranslated overall so legacy segments with
+     * no source tag still receive their translation.
      */
-    addTranslation(text) {
-        const seg = this.segments.find(s => s.status === 'original');
+    addTranslation(text, source = null) {
+        const seg = this.segments.find(s => s.status === 'original' && s.source === source)
+            || this.segments.find(s => s.status === 'original');
         if (seg) {
             seg.translation = text;
             seg.status = 'translated';
-            // Mirror update in sessionLog: find matching entry by createdAt
-            const logSeg = this.sessionLog.find(
-                s => s.status === 'original' && s.createdAt === seg.createdAt
-            );
+            // Mirror update in sessionLog: match by segment id (fall back to
+            // createdAt for entries pushed before ids existed).
+            const logSeg = (seg.id != null)
+                ? this.sessionLog.find(s => s.id === seg.id)
+                : this.sessionLog.find(s => s.status === 'original' && s.createdAt === seg.createdAt);
             if (logSeg) {
                 logSeg.translation = text;
                 logSeg.status = 'translated';
             }
         } else {
             const newSeg = {
+                id: this._nextSegId++,
                 original: '',
                 translation: text,
                 status: 'translated',
                 speaker: null,
+                source: source || null,
                 createdAt: Date.now(),
             };
             this.segments.push(newSeg);
@@ -126,6 +139,8 @@ export class TranscriptUI {
     addChatMessage(text, who = 'ME') {
         this._removeListening();
         const seg = {
+            id: this._nextSegId++,
+            source: null,
             original: text,
             translation: null,
             status: 'chat',
@@ -141,24 +156,46 @@ export class TranscriptUI {
     }
 
     /**
-     * Update provisional (in-progress) text
+     * Update provisional (in-progress) text for one source
      */
-    setProvisional(text, speaker, language) {
+    setProvisional(text, speaker, language, source = 'system') {
         this._removeListening();
-        this.provisionalText = text;
-        this.provisionalSpeaker = speaker || null;
-        this.provisionalLanguage = language || null;
+        const slot = this.provisionalBySource[source] || this.provisionalBySource.system;
+        slot.text = text;
+        slot.speaker = speaker || null;
+        slot.language = language || null;
         this._render();
     }
 
     /**
-     * Clear provisional text
+     * Clear provisional text — one source when given, all sources when omitted
      */
-    clearProvisional() {
-        this.provisionalText = '';
-        this.provisionalSpeaker = null;
-        this.provisionalLanguage = null;
+    clearProvisional(source) {
+        if (source && this.provisionalBySource[source]) {
+            Object.assign(this.provisionalBySource[source], { text: '', speaker: null, language: null });
+        } else {
+            this._clearProvisionalAll();
+        }
         this._render();
+    }
+
+    /** Reset both provisional slots without a re-render (for bulk clears). */
+    _clearProvisionalAll() {
+        for (const slot of Object.values(this.provisionalBySource)) {
+            slot.text = ''; slot.speaker = null; slot.language = null;
+        }
+    }
+
+    /**
+     * Committed transcript text for one source, chronological, from sessionLog.
+     */
+    committedTextBySource(source) {
+        return this.sessionLog
+            .filter(s => s.source === source)
+            .map(s => [s.original, s.translation].filter(Boolean).join(' '))
+            .filter(Boolean)
+            .join('\n')
+            .trim();
     }
 
     /**
@@ -166,6 +203,7 @@ export class TranscriptUI {
      */
     hasContent() {
         return this.segments.length > 0 || this.provisionalText ||
+            this.provisionalBySource.mic.text ||
             !!this.container.querySelector('.listening-indicator');
     }
 
@@ -188,9 +226,7 @@ export class TranscriptUI {
     `;
         this.segments = [];
         this.sessionLog = [];
-        this.provisionalText = '';
-        this.provisionalSpeaker = null;
-        this.provisionalLanguage = null;
+        this._clearProvisionalAll();
         this.currentSpeaker = null;
         this.currentLanguage = null;
         this.lastConfidence = null;
@@ -256,6 +292,7 @@ export class TranscriptUI {
             if (seg.original || seg.translation) lines.push('');
         }
         if (this.provisionalText) lines.push(this.provisionalText);
+        if (this.provisionalBySource.mic.text) lines.push(this.provisionalBySource.mic.text);
         return lines.join('\n').trim();
     }
 
@@ -330,7 +367,8 @@ export class TranscriptUI {
 
         // Transcript entries
         for (const seg of this.sessionLog) {
-            if (seg.speaker) lines.push(`**Speaker ${seg.speaker}:**`);
+            if (seg.source === 'mic') lines.push(`**You (mic):**`);
+            else if (seg.speaker) lines.push(`**Speaker ${seg.speaker}:**`);
             if (seg.original) lines.push(`> ${seg.original}`);
             if (seg.translation) lines.push(seg.translation);
             lines.push('');
@@ -351,9 +389,7 @@ export class TranscriptUI {
         this._ensureContent();
         this.segments = Array.isArray(segments) ? segments : [];
         if (replaceSessionLog) this.sessionLog = this.segments.map(s => ({ ...s }));
-        this.provisionalText = '';
-        this.provisionalSpeaker = null;
-        this.provisionalLanguage = null;
+        this._clearProvisionalAll();
         this.currentSpeaker = null;
         this.currentLanguage = null;
         this.lastConfidence = null;
@@ -367,9 +403,7 @@ export class TranscriptUI {
     clear() {
         this.container.innerHTML = '';
         this.segments = [];
-        this.provisionalText = '';
-        this.provisionalSpeaker = null;
-        this.provisionalLanguage = null;
+        this._clearProvisionalAll();
         this.currentSpeaker = null;
         this.currentLanguage = null;
         this.lastConfidence = null;
@@ -556,6 +590,15 @@ export class TranscriptUI {
             </div>`;
         }
 
+        // Candidate's own mic stream shows as a separate muted tail —
+        // never merged into the interviewer line.
+        const micProv = this.provisionalBySource.mic;
+        if (micProv.text) {
+            html += `<div class="subtitle-pair pending" data-source="mic">
+                <div class="subtitle-top"><span class="subtitle-prefix">MIC:</span> ${this._esc(micProv.text)}</div>
+            </div>`;
+        }
+
         this.contentEl.innerHTML = html;
         this._smartScroll(this.container.parentElement || this.container);
     }
@@ -595,6 +638,11 @@ export class TranscriptUI {
                 html += `<span class="lang-badge">${this._langEmoji(this.provisionalLanguage)}</span> `;
             }
             html += `<div class="seg-block"><div class="seg-provisional">${this._esc(this.provisionalText)}</div></div>`;
+        }
+
+        const micProvSingle = this.provisionalBySource.mic;
+        if (micProvSingle.text) {
+            html += `<div class="seg-block" data-source="mic"><div class="seg-provisional">MIC: ${this._esc(micProvSingle.text)}</div></div>`;
         }
 
         this.contentEl.innerHTML = html;
@@ -643,6 +691,11 @@ export class TranscriptUI {
         if (this.provisionalText) {
             srcHtml += `<div class="seg-text pending">${this._esc(this.provisionalText)}</div>`;
             tgtHtml += `<div class="seg-text pending">...</div>`;
+        }
+        const micProvDual = this.provisionalBySource.mic;
+        if (micProvDual.text) {
+            srcHtml += `<div class="seg-text pending" data-source="mic">MIC: ${this._esc(micProvDual.text)}</div>`;
+            tgtHtml += `<div class="seg-text pending" data-source="mic">...</div>`;
         }
 
         this.contentEl.innerHTML = `
