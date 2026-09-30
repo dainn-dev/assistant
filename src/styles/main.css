@@ -555,6 +555,25 @@ body {
   display: none;
 }
 
+#content-area.right-panel-collapsed .interview-suggestions-empty {
+  display: none;
+}
+
+#content-area.right-panel-collapsed .interview-suggestions-status {
+  display: none;
+}
+
+#content-area.right-panel-collapsed .interview-suggestions-regenerate,
+#content-area.right-panel-collapsed .interview-suggestions-close,
+#content-area.right-panel-collapsed .early-hold-btn {
+  display: none !important;
+}
+
+#content-area.right-panel-collapsed .interview-suggestions-header {
+  margin-bottom: 0;
+  justify-content: center;
+}
+
 #content-area.right-panel-collapsed .interview-suggestions-actions {
   width: 100%;
   justify-content: center;
