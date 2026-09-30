@@ -4,7 +4,8 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::json;
 
-const GEMINI_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent";
+const GEMINI_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent";
 
 /// OpenAI embeddings API max inputs per request.
 pub const OPENAI_EMBEDDINGS_MAX_INPUTS: usize = 2048;
@@ -48,14 +49,26 @@ pub fn embeddings_url_from_llm_url(llm_url: &str) -> String {
     format!("{}/embeddings", base)
 }
 
-pub fn embed_batch_prefer_openai(client: &Client, url: &str, api_key: &str, texts: &[String], dimensions: Option<usize>) -> Result<(Vec<Vec<f32>>, usize), String> {
+pub fn embed_batch_prefer_openai(
+    client: &Client,
+    url: &str,
+    api_key: &str,
+    texts: &[String],
+    dimensions: Option<usize>,
+) -> Result<(Vec<Vec<f32>>, usize), String> {
     if texts.is_empty() {
         return Ok((Vec::new(), embedding_dimension_for_openai_small()));
     }
     embed_openai(client, url, api_key, texts, dimensions)
 }
 
-fn embed_openai(client: &Client, url: &str, api_key: &str, texts: &[String], dimensions: Option<usize>) -> Result<(Vec<Vec<f32>>, usize), String> {
+fn embed_openai(
+    client: &Client,
+    url: &str,
+    api_key: &str,
+    texts: &[String],
+    dimensions: Option<usize>,
+) -> Result<(Vec<Vec<f32>>, usize), String> {
     let mut body = json!({
         "model": "text-embedding-3-small",
         "input": texts,
@@ -69,7 +82,6 @@ fn embed_openai(client: &Client, url: &str, api_key: &str, texts: &[String], dim
         .json(&body)
         .send()
         .map_err(|e| format!("Embeddings HTTP: {e}"))?;
-
 
     if !resp.status().is_success() {
         let t = resp.text().unwrap_or_default();
@@ -101,13 +113,20 @@ fn embed_openai(client: &Client, url: &str, api_key: &str, texts: &[String], dim
         }
     }
     let vecs: Vec<Vec<f32>> = pairs.into_iter().map(|(_, v)| v).collect();
-    let dim = vecs.first().map(|v| v.len()).unwrap_or(embedding_dimension_for_openai_small());
+    let dim = vecs
+        .first()
+        .map(|v| v.len())
+        .unwrap_or(embedding_dimension_for_openai_small());
     Ok((vecs, dim))
 }
 
 /// Gemini API accepts one content per request for this endpoint in the simple form.
 #[allow(dead_code)]
-fn embed_gemini_one_by_one(client: &Client, api_key: &str, texts: &[String]) -> Result<(Vec<Vec<f32>>, usize), String> {
+fn embed_gemini_one_by_one(
+    client: &Client,
+    api_key: &str,
+    texts: &[String],
+) -> Result<(Vec<Vec<f32>>, usize), String> {
     let mut out = Vec::with_capacity(texts.len());
     let mut dim = embedding_dimension_for_gemini_004();
     for t in texts {

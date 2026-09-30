@@ -1,7 +1,8 @@
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, InvokeBody, Request};
 
 /// State for the local pipeline sidecar process
 pub struct LocalPipelineState {
@@ -13,11 +14,44 @@ fn log_to_file(msg: &str) {
     let _ = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/personal_translator_pipeline.log")
-        .and_then(|mut f| {
-            writeln!(f, "[{}] {}", chrono_now(), msg)
-        });
-    eprintln!("[local-pipeline] {}", msg);
+        .open(std::env::temp_dir().join("myjavis_pipeline.log"))
+        .and_then(|mut f| writeln!(f, "[{}] {}", chrono_now(), msg));
+    tracing::info!("[local-pipeline] {}", msg);
+}
+
+/// Home directory of the current user (cross-platform).
+fn home_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_default()
+}
+
+/// Path of the MLX venv python installed by scripts/setup_mlx.py.
+/// The setup script is macOS-only (~/Library/Application Support/MyJavis),
+/// so on other platforms this path simply won't exist and we fall back
+/// to the system python.
+fn mlx_venv_python() -> PathBuf {
+    home_dir().join("Library/Application Support/MyJavis/mlx-env/bin/python3")
+}
+
+/// Candidate python executable for the pipeline sidecar.
+fn python_executable() -> String {
+    let venv = mlx_venv_python();
+    if venv.exists() {
+        log_to_file(&format!("Using venv python: {}", venv.display()));
+        return venv.to_string_lossy().to_string();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if std::path::Path::new("/opt/homebrew/bin/python3").exists() {
+            log_to_file("Using homebrew python");
+            return "/opt/homebrew/bin/python3".to_string();
+        }
+        "python3".to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows: python is the conventional launcher name.
+        "python".to_string()
+    }
 }
 
 fn chrono_now() -> String {
@@ -36,7 +70,10 @@ pub fn start_local_pipeline(
     channel: Channel<String>,
     state: tauri::State<'_, LocalPipelineState>,
 ) -> Result<(), String> {
-    log_to_file(&format!("start_local_pipeline called: src={}, tgt={}", source_lang, target_lang));
+    log_to_file(&format!(
+        "start_local_pipeline called: src={}, tgt={}",
+        source_lang, target_lang
+    ));
 
     // Send status to frontend
     let _ = channel.send(r#"{"type":"status","message":"Stopping old pipeline..."}"#.to_string());
@@ -44,20 +81,14 @@ pub fn start_local_pipeline(
     // Stop existing pipeline
     stop_local_pipeline_inner(&state);
 
-    // Also kill any orphaned pipeline processes
-    let _ = Command::new("pkill")
-        .args(["-f", "local_pipeline.py"])
-        .output();
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
     let _ = channel.send(r#"{"type":"status","message":"Finding pipeline script..."}"#.to_string());
 
     // Find the Python script — try multiple locations
     let script_path = {
         let candidates = vec![
             // Dev: project root (when running from src-tauri/)
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/local_pipeline.py"),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../scripts/local_pipeline.py"),
             // Dev: relative to current working directory
             std::path::PathBuf::from("scripts/local_pipeline.py"),
             // Production: relative to executable
@@ -68,44 +99,54 @@ pub fn start_local_pipeline(
                 .join("../Resources/scripts/local_pipeline.py"),
         ];
 
-        log_to_file(&format!("Checking candidates: {:?}", candidates.iter().map(|p| format!("{:?} exists={}", p, p.exists())).collect::<Vec<_>>()));
+        log_to_file(&format!(
+            "Checking candidates: {:?}",
+            candidates
+                .iter()
+                .map(|p| format!("{:?} exists={}", p, p.exists()))
+                .collect::<Vec<_>>()
+        ));
 
-        candidates
-            .into_iter()
-            .find(|p| p.exists())
-            .ok_or_else(|| "Pipeline script not found. Ensure scripts/local_pipeline.py exists.".to_string())?
+        candidates.into_iter().find(|p| p.exists()).ok_or_else(|| {
+            "Pipeline script not found. Ensure scripts/local_pipeline.py exists.".to_string()
+        })?
     };
 
     log_to_file(&format!("Using script: {:?}", script_path));
-    let _ = channel.send(format!(r#"{{"type":"status","message":"Starting Python pipeline..."}}"#));
+    let _ =
+        channel.send(r#"{"type":"status","message":"Starting Python pipeline..."}"#.to_string());
 
-    // Use venv python if MLX setup is complete, otherwise fall back to system python
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/phucnt".to_string());
-    let venv_python = format!("{}/Library/Application Support/MyJavis/mlx-env/bin/python3", home);
+    // Kill orphaned pipeline processes left behind by a crashed run.
+    // Scoped to macOS (pkill does not exist on Windows) and matched against
+    // the resolved script path rather than a bare substring.
+    #[cfg(target_os = "macos")]
+    {
+        let pattern = script_path.to_string_lossy().to_string();
+        let _ = Command::new("pkill").args(["-f", &pattern]).output();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
 
-    let python = if std::path::Path::new(&venv_python).exists() {
-        log_to_file(&format!("Using venv python: {}", venv_python));
-        venv_python.as_str().to_string()
-    } else if std::path::Path::new("/opt/homebrew/bin/python3").exists() {
-        log_to_file("Using homebrew python");
-        "/opt/homebrew/bin/python3".to_string()
-    } else {
-        "python3".to_string()
-    };
+    let python = python_executable();
 
-    let path_env = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-
-    let mut child = Command::new(&python)
-        .arg(&script_path)
+    let mut cmd = Command::new(&python);
+    cmd.arg(&script_path)
         .arg("--asr-model")
         .arg("whisper")
         .arg("--source-lang")
         .arg(&source_lang)
         .arg("--target-lang")
         .arg(&target_lang)
-        .env("PATH", path_env)
-        .env("HOME", &home)
-        .env("TOKENIZERS_PARALLELISM", "false")
+        .env("TOKENIZERS_PARALLELISM", "false");
+
+    // macOS: prepend homebrew paths (tauri spawns with a minimal PATH).
+    // Other platforms inherit the parent PATH unchanged.
+    #[cfg(target_os = "macos")]
+    {
+        cmd.env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+        cmd.env("HOME", home_dir());
+    }
+
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -117,14 +158,15 @@ pub fn start_local_pipeline(
         })?;
 
     log_to_file(&format!("Python process spawned, PID={}", child.id()));
-    let _ = channel.send(format!(r#"{{"type":"status","message":"Python started (PID={}), loading models..."}}"#, child.id()));
+    let _ = channel.send(format!(
+        r#"{{"type":"status","message":"Python started (PID={}), loading models..."}}"#,
+        child.id()
+    ));
 
     // Read stdout in a background thread and forward JSON to frontend
-    let stdout = child.stdout.take()
-        .ok_or("Failed to get stdout")?;
+    let stdout = child.stdout.take().ok_or("Failed to get stdout")?;
 
-    let stderr = child.stderr.take()
-        .ok_or("Failed to get stderr")?;
+    let stderr = child.stderr.take().ok_or("Failed to get stderr")?;
 
     // Forward stdout (JSON results) to frontend
     let channel_clone = channel.clone();
@@ -134,7 +176,7 @@ pub fn start_local_pipeline(
         for line in reader.lines() {
             match line {
                 Ok(line) if !line.is_empty() => {
-                    log_to_file(&format!("stdout: {}", &line));
+                    log_to_file(&format!("stdout: {}", line));
                     let _ = channel_clone.send(line);
                 }
                 Err(e) => {
@@ -158,9 +200,8 @@ pub fn start_local_pipeline(
                     log_to_file(&format!("stderr: {}", line));
                     // Forward pipeline status to frontend
                     let escaped = line.replace('"', r#"\""#);
-                    let _ = channel_clone2.send(
-                        format!(r#"{{"type":"status","message":"{}"}}"#, escaped)
-                    );
+                    let _ = channel_clone2
+                        .send(format!(r#"{{"type":"status","message":"{}"}}"#, escaped));
                 }
                 Err(_) => break,
             }
@@ -175,12 +216,26 @@ pub fn start_local_pipeline(
     Ok(())
 }
 
-/// Send audio data to the local pipeline stdin
+/// Send audio data to the local pipeline stdin.
+///
+/// Accepts a raw binary IPC body (`invoke('send_audio_to_pipeline', bytes)`)
+/// so PCM frames don't cross the bridge as JSON number arrays (~10x bloat).
+/// On Android raw bodies aren't supported, so a JSON array body is accepted
+/// as a fallback.
 #[tauri::command]
 pub fn send_audio_to_pipeline(
-    data: Vec<u8>,
+    request: Request<'_>,
     state: tauri::State<'_, LocalPipelineState>,
 ) -> Result<(), String> {
+    let data: Vec<u8> = match request.body() {
+        InvokeBody::Raw(bytes) => bytes.clone(),
+        InvokeBody::Json(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_u64().map(|n| n as u8))
+            .collect(),
+        _ => return Err("Expected raw PCM bytes body".to_string()),
+    };
+
     let mut proc = state.process.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut child) = *proc {
         if let Some(ref mut stdin) = child.stdin {
@@ -196,9 +251,7 @@ pub fn send_audio_to_pipeline(
 
 /// Stop the local pipeline
 #[tauri::command]
-pub fn stop_local_pipeline(
-    state: tauri::State<'_, LocalPipelineState>,
-) -> Result<(), String> {
+pub fn stop_local_pipeline(state: tauri::State<'_, LocalPipelineState>) -> Result<(), String> {
     log_to_file("stop_local_pipeline called");
     stop_local_pipeline_inner(&state);
     Ok(())
@@ -222,14 +275,20 @@ fn stop_local_pipeline_inner(state: &LocalPipelineState) {
 /// Check if MLX setup is complete
 #[tauri::command]
 pub fn check_mlx_setup() -> Result<String, String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/phucnt".to_string());
-    let marker = format!("{}/Library/Application Support/MyJavis/mlx-env/.setup_complete", home);
-    let venv_python = format!("{}/Library/Application Support/MyJavis/mlx-env/bin/python3", home);
+    let venv_python = mlx_venv_python();
+    let marker = venv_python
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(".setup_complete");
 
-    if std::path::Path::new(&marker).exists() && std::path::Path::new(&venv_python).exists() {
+    if marker.exists() && venv_python.exists() {
         // Read marker to get details
         let content = std::fs::read_to_string(&marker).unwrap_or_default();
-        Ok(format!(r#"{{"ready":true,"python":"{}","details":{}}}"#, venv_python, content))
+        Ok(format!(
+            r#"{{"ready":true,"python":"{}","details":{}}}"#,
+            venv_python.to_string_lossy().replace('\\', "/"),
+            content
+        ))
     } else {
         Ok(r#"{"ready":false}"#.to_string())
     }
@@ -237,9 +296,7 @@ pub fn check_mlx_setup() -> Result<String, String> {
 
 /// Run MLX setup (install venv + packages + download models)
 #[tauri::command]
-pub fn run_mlx_setup(
-    channel: Channel<String>,
-) -> Result<(), String> {
+pub fn run_mlx_setup(channel: Channel<String>) -> Result<(), String> {
     log_to_file("run_mlx_setup called");
 
     // Find setup script
@@ -260,12 +317,16 @@ pub fn run_mlx_setup(
             .ok_or_else(|| "Setup script not found.".to_string())?
     };
 
-    // Use system python to run setup (which creates the venv)
+    // Use system python to run setup (which creates the venv).
+    // Do not use the venv python itself — it doesn't exist yet.
+    #[cfg(target_os = "macos")]
     let python = if std::path::Path::new("/opt/homebrew/bin/python3").exists() {
         "/opt/homebrew/bin/python3"
     } else {
         "python3"
     };
+    #[cfg(not(target_os = "macos"))]
+    let python = "python";
 
     let mut child = Command::new(python)
         .arg(&script_path)
@@ -285,7 +346,7 @@ pub fn run_mlx_setup(
         for line in reader.lines() {
             match line {
                 Ok(line) if !line.is_empty() => {
-                    log_to_file(&format!("setup stdout: {}", &line));
+                    log_to_file(&format!("setup stdout: {}", line));
                     let _ = channel_clone.send(line);
                 }
                 Err(e) => {
@@ -308,9 +369,8 @@ pub fn run_mlx_setup(
                 Ok(line) => {
                     log_to_file(&format!("setup stderr: {}", line));
                     let escaped = line.replace('"', r#"\""#);
-                    let _ = channel_clone2.send(
-                        format!(r#"{{"type":"log","message":"{}"}}"#, escaped)
-                    );
+                    let _ =
+                        channel_clone2.send(format!(r#"{{"type":"log","message":"{}"}}"#, escaped));
                 }
                 Err(_) => break,
             }

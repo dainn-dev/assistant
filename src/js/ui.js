@@ -28,6 +28,7 @@ export class TranscriptUI {
         this.currentSpeaker = null; // Track current speaker to detect changes
         this.currentLanguage = null; // Track current language to detect changes
         this.lastConfidence = null; // Last confidence score from Soniox
+        this.onChange = null; // () => void — fired when sessionLog grows (segment finalized)
     }
 
     /**
@@ -85,6 +86,7 @@ export class TranscriptUI {
         if (language) this.currentLanguage = language;
         this._cleanupStaleOriginals();
         this._render();
+        this.onChange?.();
     }
 
     /**
@@ -115,6 +117,7 @@ export class TranscriptUI {
             this.sessionLog.push({ ...newSeg });
         }
         this._render();
+        this.onChange?.();
     }
 
     /**
@@ -134,6 +137,7 @@ export class TranscriptUI {
         this.segments.push(seg);
         this.sessionLog.push({ ...seg });
         this._render();
+        this.onChange?.();
     }
 
     /**
@@ -169,6 +173,7 @@ export class TranscriptUI {
      * Show placeholder state
      */
     showPlaceholder() {
+        const mod = navigator.platform.toUpperCase().includes('MAC') ? '⌘' : 'Ctrl+';
         this.container.innerHTML = `
       <div class="transcript-placeholder">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
@@ -178,7 +183,7 @@ export class TranscriptUI {
           <line x1="8" y1="23" x2="16" y2="23"/>
         </svg>
         <p>Press ▶ to start translating</p>
-        <p class="shortcut-hint">⌘ Enter</p>
+        <p class="shortcut-hint">${mod} Enter</p>
       </div>
     `;
         this.segments = [];

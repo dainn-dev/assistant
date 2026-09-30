@@ -9,6 +9,9 @@ use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug)]
 pub enum SecretSlot {
+    Soniox,
+    ElevenLabs,
+    Google,
     Llm,
     Pinecone,
 }
@@ -16,6 +19,9 @@ pub enum SecretSlot {
 impl SecretSlot {
     fn key(self) -> &'static str {
         match self {
+            SecretSlot::Soniox => "soniox_api_key",
+            SecretSlot::ElevenLabs => "elevenlabs_api_key",
+            SecretSlot::Google => "google_tts_api_key",
             SecretSlot::Llm => "llm_api_key",
             SecretSlot::Pinecone => "pinecone_api_key",
         }
@@ -23,6 +29,9 @@ impl SecretSlot {
 
     pub fn parse(s: &str) -> Option<SecretSlot> {
         match s.to_lowercase().as_str() {
+            "soniox" => Some(SecretSlot::Soniox),
+            "elevenlabs" => Some(SecretSlot::ElevenLabs),
+            "google" => Some(SecretSlot::Google),
             "llm" => Some(SecretSlot::Llm),
             "pinecone" => Some(SecretSlot::Pinecone),
             _ => None,
@@ -71,7 +80,11 @@ pub fn set_secret(slot: SecretSlot, value: &str) -> Result<(), String> {
 
 pub fn get_secret(slot: SecretSlot) -> Result<Option<String>, String> {
     let store = load_secrets();
-    Ok(store.keys.get(slot.key()).filter(|v| !v.is_empty()).cloned())
+    Ok(store
+        .keys
+        .get(slot.key())
+        .filter(|v| !v.is_empty())
+        .cloned())
 }
 
 pub fn delete_secret(slot: SecretSlot) -> Result<(), String> {

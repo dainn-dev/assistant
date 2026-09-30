@@ -1,8 +1,8 @@
+use chrono::Local;
+use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
-use chrono::Local;
-use serde::Serialize;
 
 /// Get the transcript directory path
 fn transcript_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -16,17 +16,57 @@ fn transcript_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Save a complete transcript session to a timestamped file
+/// Save a transcript session to a file.
+/// Also writes a `<name>.segments.json` sidecar with the structured segment
+/// list so the read-only view doesn't have to re-parse markdown.
+///
+/// `filename` is optional: passing a name returned by an earlier call
+/// overwrites that file (used for per-session autosave so repeated stops
+/// keep writing to the same artifact). A missing/None filename creates a
+/// new timestamped file; same-second collisions get a `-N` suffix.
 /// Called when user clicks "Clear", stops recording, or closes app
 #[tauri::command]
-pub fn save_transcript(app: AppHandle, content: String) -> Result<String, String> {
+pub fn save_transcript(
+    app: AppHandle,
+    content: String,
+    segments: Option<serde_json::Value>,
+    filename: Option<String>,
+) -> Result<String, String> {
     let dir = transcript_dir(&app)?;
-    let now = Local::now();
-    let filename = format!("{}.md", now.format("%Y-%m-%d_%H-%M-%S"));
+    let filename = match filename {
+        Some(name) => {
+            // Same sanitization as read/delete: basename only, .md only
+            if name.contains('/')
+                || name.contains('\\')
+                || name.contains("..")
+                || !name.ends_with(".md")
+            {
+                return Err("Invalid filename".to_string());
+            }
+            name
+        }
+        None => {
+            let base = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+            let mut candidate = format!("{}.md", base);
+            let mut n = 1;
+            while dir.join(&candidate).exists() {
+                candidate = format!("{}-{}.md", base, n);
+                n += 1;
+            }
+            candidate
+        }
+    };
     let filepath = dir.join(&filename);
 
-    fs::write(&filepath, content)
-        .map_err(|e| format!("Failed to save transcript: {}", e))?;
+    fs::write(&filepath, content).map_err(|e| format!("Failed to save transcript: {}", e))?;
+    tracing::info!("transcript saved to {}", filepath.display());
+
+    if let Some(segments) = segments {
+        if let Ok(json) = serde_json::to_string_pretty(&segments) {
+            // Best-effort — the .md is the canonical artifact
+            let _ = fs::write(filepath.with_extension("segments.json"), json);
+        }
+    }
 
     Ok(filepath.to_string_lossy().to_string())
 }
@@ -117,6 +157,35 @@ pub fn list_transcripts(app: AppHandle) -> Result<Vec<TranscriptEntry>, String> 
     Ok(entries)
 }
 
+/// Read the structured segments sidecar for a saved transcript, if present.
+/// Returns null for transcripts saved before sidecars existed — the frontend
+/// falls back to markdown parsing in that case.
+#[tauri::command]
+pub fn read_transcript_segments(
+    app: AppHandle,
+    filename: String,
+) -> Result<Option<serde_json::Value>, String> {
+    // Sanitize: no path traversal, and require transcript files only
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid filename".to_string());
+    }
+    if !filename.ends_with(".md") {
+        return Err("Invalid filename".to_string());
+    }
+
+    let dir = transcript_dir(&app)?;
+    let sidecar = dir.join(&filename).with_extension("segments.json");
+    if !sidecar.exists() {
+        return Ok(None);
+    }
+
+    let text = fs::read_to_string(&sidecar)
+        .map_err(|e| format!("Failed to read transcript segments: {}", e))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("Failed to parse transcript segments: {}", e))
+}
+
 /// Read the content of a saved transcript file
 #[tauri::command]
 pub fn read_transcript(app: AppHandle, filename: String) -> Result<String, String> {
@@ -126,8 +195,7 @@ pub fn read_transcript(app: AppHandle, filename: String) -> Result<String, Strin
     }
     let dir = transcript_dir(&app)?;
     let filepath = dir.join(&filename);
-    fs::read_to_string(&filepath)
-        .map_err(|e| format!("Failed to read transcript: {}", e))
+    fs::read_to_string(&filepath).map_err(|e| format!("Failed to read transcript: {}", e))
 }
 
 /// Delete a saved transcript file
@@ -143,6 +211,9 @@ pub fn delete_transcript(app: AppHandle, filename: String) -> Result<(), String>
 
     let dir = transcript_dir(&app)?;
     let filepath = dir.join(&filename);
+
+    // Remove the segments sidecar too (best-effort)
+    let _ = fs::remove_file(filepath.with_extension("segments.json"));
 
     match fs::remove_file(&filepath) {
         Ok(_) => Ok(()),

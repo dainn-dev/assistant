@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   overlay_opacity: 0.85,
   font_family: 'Inter',
   font_size: 16,
+  font_color: '#ffffff',
   max_lines: 5,
   show_original: true,
   translation_mode: 'soniox',

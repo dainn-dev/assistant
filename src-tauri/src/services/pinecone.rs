@@ -130,5 +130,9 @@ pub fn pinecone_vector_from_parts(
     }
     let excerpt: String = content_excerpt.chars().take(1800).collect();
     metadata.insert("content".into(), json!(excerpt));
-    PineconeVector { id, values, metadata }
+    PineconeVector {
+        id,
+        values,
+        metadata,
+    }
 }

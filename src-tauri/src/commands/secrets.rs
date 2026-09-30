@@ -1,4 +1,4 @@
-use crate::secrets::{SecretSlot, delete_secret, has_secret, set_secret};
+use crate::secrets::{delete_secret, has_secret, set_secret, SecretSlot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -10,13 +10,17 @@ pub struct InterviewSetKeyPayload {
 
 #[derive(Debug, Serialize)]
 pub struct ProviderKeyFlags {
+    pub soniox: bool,
+    pub elevenlabs: bool,
+    pub google: bool,
     pub llm: bool,
     pub pinecone: bool,
 }
 
 #[tauri::command]
 pub fn interview_set_api_key(payload: InterviewSetKeyPayload) -> Result<(), String> {
-    let slot = SecretSlot::parse(&payload.provider).ok_or_else(|| "Unknown provider".to_string())?;
+    let slot =
+        SecretSlot::parse(&payload.provider).ok_or_else(|| "Unknown provider".to_string())?;
     let trimmed = payload.api_key.trim();
     if trimmed.is_empty() {
         return Err("API key is empty".to_string());
@@ -39,6 +43,9 @@ pub fn interview_has_api_key(provider: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn interview_key_status() -> ProviderKeyFlags {
     ProviderKeyFlags {
+        soniox: has_secret(SecretSlot::Soniox).unwrap_or(false),
+        elevenlabs: has_secret(SecretSlot::ElevenLabs).unwrap_or(false),
+        google: has_secret(SecretSlot::Google).unwrap_or(false),
         llm: has_secret(SecretSlot::Llm).unwrap_or(false),
         pinecone: has_secret(SecretSlot::Pinecone).unwrap_or(false),
     }

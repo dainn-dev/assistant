@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -68,7 +68,12 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-pub fn insert_message(conn: &Connection, user_id: &str, role: &str, content: &str) -> Result<i64, String> {
+pub fn insert_message(
+    conn: &Connection,
+    user_id: &str,
+    role: &str,
+    content: &str,
+) -> Result<i64, String> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO messages (user_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -78,7 +83,11 @@ pub fn insert_message(conn: &Connection, user_id: &str, role: &str, content: &st
     Ok(conn.last_insert_rowid())
 }
 
-pub fn recent_messages(conn: &Connection, user_id: &str, limit: usize) -> Result<Vec<(String, String, String)>, String> {
+pub fn recent_messages(
+    conn: &Connection,
+    user_id: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, String)>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT role, content, created_at FROM messages WHERE user_id = ?1 ORDER BY created_at DESC LIMIT ?2",
@@ -86,7 +95,11 @@ pub fn recent_messages(conn: &Connection, user_id: &str, limit: usize) -> Result
         .map_err(|e| format!("prepare messages: {e}"))?;
     let rows = stmt
         .query_map(params![user_id, limit as i64], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .map_err(|e| format!("query messages: {e}"))?;
 
@@ -102,8 +115,7 @@ pub fn get_summary(conn: &Connection, user_id: &str) -> Result<Option<String>, S
     let mut stmt = conn
         .prepare("SELECT summary FROM summaries WHERE user_id = ?1")
         .map_err(|e| format!("prepare summary: {e}"))?;
-    stmt
-        .query_row(params![user_id], |row| row.get(0))
+    stmt.query_row(params![user_id], |row| row.get(0))
         .optional()
         .map_err(|e| format!("summary: {e}"))
 }
@@ -132,4 +144,3 @@ pub fn upsert_document(
     .map_err(|e| format!("insert document: {e}"))?;
     Ok(())
 }
-

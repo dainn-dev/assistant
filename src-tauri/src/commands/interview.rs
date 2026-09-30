@@ -1,4 +1,5 @@
 use crate::db::{self, InterviewDb};
+use crate::secrets::{self, SecretSlot};
 use crate::services::embeddings;
 use crate::services::llm;
 use crate::services::pinecone::{pinecone_vector_from_parts, query_top_k, upsert_vectors};
@@ -12,12 +13,68 @@ use uuid::Uuid;
 
 const INGEST_CHUNK_MAX_CHARS: usize = 1200;
 const INGEST_CHUNK_OVERLAP_CHARS: usize = 150;
+/// Upper bound on a single upload — keeps extractor memory bounded and
+/// rejects accidental multi-hundred-MB drops.
+const INGEST_FILE_MAX_BYTES: u64 = 25 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InterviewFilePart {
     pub filename: String,
+    #[serde(default)]
     pub bytes: Vec<u8>,
+    /// Optional filesystem path. When set, the backend reads the file itself
+    /// so multi-MB PDFs/DOCX never cross the IPC bridge as JSON byte arrays.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+impl InterviewFilePart {
+    /// Materialize `bytes` from `path` if needed, enforcing the size cap.
+    fn resolve(mut self) -> Result<Self, String> {
+        if let Some(path) = self.path.take() {
+            let meta = std::fs::metadata(&path)
+                .map_err(|e| format!("Cannot stat '{}': {e}", self.filename))?;
+            if meta.len() > INGEST_FILE_MAX_BYTES {
+                return Err(format!(
+                    "'{}' is too large ({} MB, max {} MB)",
+                    self.filename,
+                    meta.len() / (1024 * 1024),
+                    INGEST_FILE_MAX_BYTES / (1024 * 1024)
+                ));
+            }
+            self.bytes = std::fs::read(&path)
+                .map_err(|e| format!("Cannot read '{}': {e}", self.filename))?;
+        }
+        if self.bytes.len() as u64 > INGEST_FILE_MAX_BYTES {
+            return Err(format!(
+                "'{}' is too large (max {} MB)",
+                self.filename,
+                INGEST_FILE_MAX_BYTES / (1024 * 1024)
+            ));
+        }
+        if self.bytes.is_empty() {
+            return Err(format!("'{}' is empty", self.filename));
+        }
+        Ok(self)
+    }
+}
+
+/// Pinecone namespaces derive from `user_id` — keep it a sane identifier
+/// (non-empty, bounded, no control/whitespace chars that could break URLs
+/// or collide across users).
+fn sanitize_user_id(user_id: &str) -> Result<String, String> {
+    let trimmed = user_id.trim();
+    if trimmed.is_empty() {
+        return Err("user_id is empty".to_string());
+    }
+    if trimmed.chars().count() > 128 {
+        return Err("user_id is too long".to_string());
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("user_id contains invalid characters".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +147,8 @@ fn extract_docx(data: &[u8]) -> Result<String, String> {
         .by_name("word/document.xml")
         .map_err(|e| format!("docx missing document.xml: {e}"))?;
     let mut xml = String::new();
-    file.read_to_string(&mut xml).map_err(|e| format!("docx read: {e}"))?;
+    file.read_to_string(&mut xml)
+        .map_err(|e| format!("docx read: {e}"))?;
 
     let mut reader = Reader::from_str(&xml);
     reader.config_mut().trim_text(true);
@@ -153,7 +211,7 @@ fn chunk_text_with_overlap(text: &str, max_chars: usize, overlap: usize) -> Vec<
     }
     let overlap = overlap.min(max_chars.saturating_sub(1));
 
-    fn overlap_suffix<'a>(s: &'a str, max_overlap_chars: usize) -> &'a str {
+    fn overlap_suffix(s: &str, max_overlap_chars: usize) -> &str {
         if max_overlap_chars == 0 || s.is_empty() {
             return "";
         }
@@ -162,15 +220,11 @@ fn chunk_text_with_overlap(text: &str, max_chars: usize, overlap: usize) -> Vec<
             return s;
         }
         let skip = char_count - max_overlap_chars;
-        let mut n = 0usize;
-        let mut start_byte = 0usize;
-        for (i, _) in s.char_indices() {
-            if n >= skip {
-                start_byte = i;
-                break;
-            }
-            n += 1;
-        }
+        let start_byte = s
+            .char_indices()
+            .nth(skip)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
         let tail = &s[start_byte..];
         match tail.find(' ') {
             Some(pos) if pos + 1 < tail.len() => &tail[pos + 1..],
@@ -236,7 +290,7 @@ fn extract_json_array_slice(text: &str) -> Option<&str> {
 
 fn line_fallback_suggestion_strings(text: &str) -> Vec<String> {
     text.lines()
-        .map(|l| l.trim().trim_start_matches(|c| c == '-' || c == '•').trim().to_string())
+        .map(|l| l.trim().trim_start_matches(['-', '•']).trim().to_string())
         .filter(|l| !l.is_empty())
         .take(6)
         .collect()
@@ -362,7 +416,10 @@ struct MeetingSuggestionSingleRow {
     suggestion_kind: String,
 }
 
-fn parse_meeting_suggestions_from_llm(raw: &str, suggestion_type: &str) -> Vec<InterviewSuggestionItem> {
+fn parse_meeting_suggestions_from_llm(
+    raw: &str,
+    suggestion_type: &str,
+) -> Vec<InterviewSuggestionItem> {
     let st = normalized_suggestion_type(suggestion_type);
     let default_kind = "talking_point";
 
@@ -468,23 +525,32 @@ fn parse_meeting_suggestions_from_llm(raw: &str, suggestion_type: &str) -> Vec<I
 }
 
 fn emit_progress(app: &AppHandle, doc_type: &str, stage: &str, current: usize, total: usize) {
-    let _ = app.emit("ingest:progress", serde_json::json!({
-        "docType": doc_type,
-        "stage": stage,
-        "current": current,
-        "total": total,
-    }));
+    let _ = app.emit(
+        "ingest:progress",
+        serde_json::json!({
+            "docType": doc_type,
+            "stage": stage,
+            "current": current,
+            "total": total,
+        }),
+    );
+}
+
+/// Shared dependencies for document ingestion — bundling keeps
+/// `ingest_one_doc` readable and under the clippy arg limit.
+struct IngestCtx<'a> {
+    conn: &'a rusqlite::Connection,
+    client: &'a reqwest::blocking::Client,
+    pinecone_host: &'a str,
+    pine_key: &'a str,
+    embeddings_url: &'a str,
+    embeddings_key: &'a str,
+    user_id: &'a str,
 }
 
 fn ingest_one_doc(
     app: &AppHandle,
-    conn: &rusqlite::Connection,
-    client: &reqwest::blocking::Client,
-    pinecone_host: &str,
-    pine_key: &str,
-    embeddings_url: &str,
-    embeddings_key: &str,
-    user_id: &str,
+    ctx: &IngestCtx<'_>,
     doc_type: &str,
     part: InterviewFilePart,
     expected_dim: usize,
@@ -492,7 +558,15 @@ fn ingest_one_doc(
     emit_progress(app, doc_type, "extracting", 0, 1);
     let text = extract_file_text(&part.filename, &part.bytes)?;
     let doc_id = Uuid::new_v4().to_string();
-    db::upsert_document(conn, &doc_id, user_id, doc_type, &part.filename, Some(&part.bytes), &text)?;
+    db::upsert_document(
+        ctx.conn,
+        &doc_id,
+        ctx.user_id,
+        doc_type,
+        &part.filename,
+        Some(&part.bytes),
+        &text,
+    )?;
 
     fn normalize_whitespace_key(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
@@ -530,7 +604,13 @@ fn ingest_one_doc(
             .iter()
             .map(|(_, ch)| ch.clone())
             .collect();
-        let (vecs, dim) = embeddings::embed_batch_prefer_openai(client, embeddings_url, embeddings_key, &batch, Some(expected_dim))?;
+        let (vecs, dim) = embeddings::embed_batch_prefer_openai(
+            ctx.client,
+            ctx.embeddings_url,
+            ctx.embeddings_key,
+            &batch,
+            Some(expected_dim),
+        )?;
         emit_progress(app, doc_type, "embedding", batch_end, total_chunks);
         if dim != expected_dim {
             return Err(format!(
@@ -548,11 +628,11 @@ fn ingest_one_doc(
             let idx = batch_start + j;
             let (orig_i, ch) = &unique_chunks[idx];
             let ref_id = format!("{doc_id}#{orig_i}");
-            let pid = format!("{user_id}_{doc_id}_{orig_i}");
+            let pid = format!("{}_{doc_id}_{orig_i}", ctx.user_id);
             all_vectors.push(pinecone_vector_from_parts(
                 pid,
                 v,
-                user_id,
+                ctx.user_id,
                 "doc_chunk",
                 &ref_id,
                 Some(doc_type),
@@ -561,7 +641,13 @@ fn ingest_one_doc(
         }
     }
     emit_progress(app, doc_type, "upserting", 0, 1);
-    upsert_vectors(client, pinecone_host, pine_key, Some(user_id), all_vectors)?;
+    upsert_vectors(
+        ctx.client,
+        ctx.pinecone_host,
+        ctx.pine_key,
+        Some(ctx.user_id),
+        all_vectors,
+    )?;
     emit_progress(app, doc_type, "done", total_chunks, total_chunks);
     Ok((doc_id, total_chunks))
 }
@@ -576,11 +662,18 @@ pub fn ingest_interview_files(
     if req.cv.is_none() && req.jd.is_none() {
         return Err("No files to ingest".to_string());
     }
+    req.user_id = sanitize_user_id(&req.user_id)?;
 
-    let (pinecone_host, expected_dim, pine_key, llm_url, llm_api_key) = {
+    let (pinecone_host, expected_dim, llm_url) = {
         let g = settings.0.lock().map_err(|e| e.to_string())?;
-        (g.pinecone_host.clone(), g.pinecone_vector_dimension as usize, g.pinecone_api_key.clone(), g.llm_url.clone(), g.llm_api_key.clone())
+        (
+            g.pinecone_host.clone(),
+            g.pinecone_vector_dimension as usize,
+            g.llm_url.clone(),
+        )
     };
+    let pine_key = secrets::get_secret(SecretSlot::Pinecone)?.unwrap_or_default();
+    let llm_api_key = secrets::get_secret(SecretSlot::Llm)?.unwrap_or_default();
     if pinecone_host.trim().is_empty() {
         return Err("Pinecone host is empty — fill it in Settings → AI.".to_string());
     }
@@ -600,37 +693,25 @@ pub fn ingest_interview_files(
     let mut cv_chunks = 0usize;
     let mut jd_chunks = 0usize;
 
+    let ctx = IngestCtx {
+        conn: &conn,
+        client: &client,
+        pinecone_host: &pinecone_host,
+        pine_key: &pine_key,
+        embeddings_url: &embeddings_url,
+        embeddings_key: &llm_api_key,
+        user_id: &req.user_id,
+    };
+
     if let Some(cv) = req.cv.take() {
-        let (id, n) = ingest_one_doc(
-            &app,
-            &conn,
-            &client,
-            &pinecone_host,
-            &pine_key,
-            &embeddings_url,
-            &llm_api_key,
-            &req.user_id,
-            "cv",
-            cv,
-            expected_dim,
-        )?;
+        let cv = cv.resolve()?;
+        let (id, n) = ingest_one_doc(&app, &ctx, "cv", cv, expected_dim)?;
         cv_doc = Some(id);
         cv_chunks = n;
     }
     if let Some(jd) = req.jd.take() {
-        let (id, n) = ingest_one_doc(
-            &app,
-            &conn,
-            &client,
-            &pinecone_host,
-            &pine_key,
-            &embeddings_url,
-            &llm_api_key,
-            &req.user_id,
-            "jd",
-            jd,
-            expected_dim,
-        )?;
+        let jd = jd.resolve()?;
+        let (id, n) = ingest_one_doc(&app, &ctx, "jd", jd, expected_dim)?;
         jd_doc = Some(id);
         jd_chunks = n;
     }
@@ -669,8 +750,6 @@ pub fn suggest_interview_answers(
         source_language,
         target_language,
         suggestion_type,
-        llm_key,
-        pine_key,
         app_mode_from_settings,
     ) = {
         let g = settings.0.lock().map_err(|e| e.to_string())?;
@@ -682,11 +761,11 @@ pub fn suggest_interview_answers(
             g.source_language.clone(),
             g.target_language.clone(),
             g.suggestion_type.clone(),
-            g.llm_api_key.clone(),
-            g.pinecone_api_key.clone(),
             g.app_mode.clone(),
         )
     };
+    let llm_key = secrets::get_secret(SecretSlot::Llm)?.unwrap_or_default();
+    let pine_key = secrets::get_secret(SecretSlot::Pinecone)?.unwrap_or_default();
     if llm_url.trim().is_empty() {
         return Err("LLM URL not configured — fill it in Settings → AI.".to_string());
     }
@@ -698,14 +777,21 @@ pub fn suggest_interview_answers(
     }
 
     // Request app_mode takes priority over persisted settings
-    let app_mode = req.app_mode.as_deref()
+    let app_mode = req
+        .app_mode
+        .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or(&app_mode_from_settings);
 
     if app_mode == "Meeting" {
         // ── Meeting path ──────────────────────────────────────────────────────
         // FR-7 empty-context guard: < 2 non-empty lines → return placeholder, no LLM call
-        let transcript = req.transcript_context.as_deref().unwrap_or("").trim().to_string();
+        let transcript = req
+            .transcript_context
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if count_speaker_lines(&transcript) < 2 {
             return Ok(SuggestInterviewAnswersResponse {
                 suggestions: vec![InterviewSuggestionItem {
@@ -786,8 +872,7 @@ Recent conversation excerpt:\n{transcript}\n",
 
     let db_path = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        conn
-            .path()
+        conn.path()
             .map(PathBuf::from)
             .ok_or_else(|| "SQLite path unavailable".to_string())?
     };
@@ -835,7 +920,13 @@ Recent conversation excerpt:\n{transcript}\n",
     };
 
     let emb_url = embeddings::embeddings_url_from_llm_url(&llm_url);
-    let (query_vec, qdim) = embeddings::embed_batch_prefer_openai(&client, &emb_url, &llm_key, &[query_text.clone()], Some(expected_dim))?;
+    let (query_vec, qdim) = embeddings::embed_batch_prefer_openai(
+        &client,
+        &emb_url,
+        &llm_key,
+        std::slice::from_ref(&query_text),
+        Some(expected_dim),
+    )?;
     if qdim != expected_dim {
         return Err(format!(
             "Embedding dimension mismatch: got {qdim}, settings {expected_dim}."
@@ -930,4 +1021,104 @@ Interviewer's question / task focus:\n\
     };
 
     Ok(SuggestInterviewAnswersResponse { suggestions, debug })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_text_empty_inputs() {
+        assert!(chunk_text_with_overlap("", 100, 10).is_empty());
+        assert!(chunk_text_with_overlap("hello", 0, 0).is_empty());
+    }
+
+    #[test]
+    fn chunk_text_short_text_single_chunk() {
+        let chunks = chunk_text_with_overlap("one two three", 100, 10);
+        assert_eq!(chunks, vec!["one two three"]);
+    }
+
+    #[test]
+    fn chunk_text_splits_on_word_boundaries() {
+        // 5 words of 4 chars => "aaaa bbbb" is 9 bytes; max 9 => two chunks.
+        let chunks = chunk_text_with_overlap("aaaa bbbb cccc dddd", 9, 0);
+        assert_eq!(chunks, vec!["aaaa bbbb", "cccc dddd"]);
+        for c in &chunks {
+            assert!(c.len() <= 9);
+            assert!(!c.starts_with(' ') && !c.ends_with(' '));
+        }
+    }
+
+    #[test]
+    fn chunk_text_overlap_carries_suffix_forward() {
+        let chunks = chunk_text_with_overlap("aaaa bbbb cccc dddd eeee", 9, 4);
+        assert!(chunks.len() >= 2);
+        // Each chunk after the first starts with a suffix of the previous chunk.
+        for pair in chunks.windows(2) {
+            let prev_last_word = pair[0].rsplit(' ').next().unwrap();
+            assert!(
+                pair[1].contains(prev_last_word),
+                "chunk {:?} should overlap with {:?}",
+                pair[1],
+                pair[0]
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_text_oversized_word_not_dropped() {
+        // A single word longer than max_chars still gets emitted, not lost.
+        let chunks = chunk_text_with_overlap("supercalifragilistic ok", 5, 0);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks.iter().any(|c| c == "supercalifragilistic"));
+        assert!(chunks.iter().any(|c| c == "ok"));
+    }
+
+    #[test]
+    fn parse_suggestions_json_array_of_strings_translation() {
+        let raw = r#"Here you go: ["Chào bạn", "Rất vui được gặp"]"#;
+        let items = parse_suggestions_from_llm(raw, "translation");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].translation, "Chào bạn");
+        assert_eq!(items[0].target, "");
+        assert_eq!(items[0].suggestion_kind, "answer");
+    }
+
+    #[test]
+    fn parse_suggestions_json_rows_both() {
+        let raw = r#"[{"target": "What is your experience?", "translation": "Kinh nghiệm của bạn là gì?"}]"#;
+        let items = parse_suggestions_from_llm(raw, "both");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].target, "What is your experience?");
+        assert_eq!(items[0].translation, "Kinh nghiệm của bạn là gì?");
+    }
+
+    #[test]
+    fn parse_suggestions_plain_text_fallback() {
+        let raw = "- First answer\n• Second answer\n\nThird answer";
+        let items = parse_suggestions_from_llm(raw, "target");
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].target, "First answer");
+        assert_eq!(items[1].target, "Second answer");
+        assert_eq!(items[2].target, "Third answer");
+    }
+
+    #[test]
+    fn parse_suggestions_both_falls_back_to_string_array() {
+        // 'both' prefers {target, translation} rows but accepts plain strings.
+        let raw = r#"["answer one", "answer two"]"#;
+        let items = parse_suggestions_from_llm(raw, "both");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].target, "answer one");
+        assert_eq!(items[0].translation, "answer one");
+    }
+
+    #[test]
+    fn parse_suggestions_unknown_type_defaults_to_translation() {
+        let items = parse_suggestions_from_llm("[\"x\"]", "bogus");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].translation, "x");
+        assert_eq!(items[0].target, "");
+    }
 }

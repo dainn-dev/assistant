@@ -1,8 +1,9 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use super::resample::{self, Resampler};
 use super::TARGET_SAMPLE_RATE;
 
 /// System audio capture using WASAPI loopback on Windows.
@@ -40,7 +41,7 @@ impl SystemAudioCapture {
                     // ALAC path completed normally
                 }
                 Err(e) => {
-                    eprintln!(
+                    tracing::warn!(
                         "[wasapi] Application Loopback (ALAC) not available: {}. \
                          Falling back to legacy WASAPI loopback.",
                         e
@@ -74,30 +75,20 @@ impl Default for SystemAudioCapture {
 // Windows API imports
 // ─────────────────────────────────────────────────────────────────────────────
 
+use windows::core::{implement, IUnknown, Interface, PCWSTR};
 use windows::Win32::Media::Audio::{
-    ActivateAudioInterfaceAsync,
-    AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_ACTIVATION_PARAMS_0,
-    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    AUDCLNT_BUFFERFLAGS_SILENT,
-    AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_LOOPBACK,
-    IActivateAudioInterfaceAsyncOperation,
-    IActivateAudioInterfaceCompletionHandler,
-    IActivateAudioInterfaceCompletionHandler_Impl,
-    IAudioCaptureClient,
-    IAudioClient,
-    IMMDeviceEnumerator,
-    MMDeviceEnumerator,
+    eCapture, eConsole, eRender, ActivateAudioInterfaceAsync,
+    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
+    IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
+    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
     PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
-    eConsole,
-    eRender,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoUninitialize, CLSCTX_ALL,
+    COINIT_MULTITHREADED,
 };
-use windows::core::{implement, Interface, IUnknown, PCWSTR};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COM completion handler for ActivateAudioInterfaceAsync
@@ -114,8 +105,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for CompletionHandler_Impl {
         activate_operation: Option<&IActivateAudioInterfaceAsyncOperation>,
     ) -> windows::core::Result<()> {
         let result: Result<IAudioClient, String> = (|| {
-            let op =
-                activate_operation.ok_or_else(|| "No operation provided".to_string())?;
+            let op = activate_operation.ok_or_else(|| "No operation provided".to_string())?;
             let mut hr = windows::core::HRESULT(0);
             let mut activated: Option<IUnknown> = None;
             unsafe {
@@ -135,7 +125,8 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for CompletionHandler_Impl {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Build a VT_BLOB PROPVARIANT pointing at AUDIOCLIENT_ACTIVATION_PARAMS.
+// Build a VT_BLOB PROPVARIANT pointing at a CoTaskMem-allocated copy of
+// AUDIOCLIENT_ACTIVATION_PARAMS.
 //
 // windows::core::PROPVARIANT is repr(transparent) over a private inner type.
 // Layout (matching the Windows SDK PROPVARIANT structure):
@@ -146,11 +137,9 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for CompletionHandler_Impl {
 //
 // VT_BLOB = 65 (0x41)
 //
-// The returned PROPVARIANT must be forgotten (not dropped) because pBlobData
-// points to stack memory, not heap — PropVariantClear must not free it.
-//
-// IMPORTANT: This is incorrect and can cause heap corruption. We now allocate
-// the blob with CoTaskMemAlloc so PROPVARIANT can be safely cleared/dropped.
+// The blob is allocated with CoTaskMemAlloc, so when the returned PROPVARIANT
+// is dropped, PropVariantClear frees it via CoTaskMemFree — no manual free and
+// no leak. The PROPVARIANT must stay alive until activation completes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 unsafe fn build_activation_propvariant(
@@ -194,20 +183,20 @@ unsafe fn run_capture_loop(
     audio_client: &IAudioClient,
     sender: &mpsc::Sender<Vec<u8>>,
     is_capturing: &Arc<AtomicBool>,
-    source_rate: u32,
     source_channels: u32,
     bits_per_sample: u16,
+    resampler: &mut Resampler,
 ) {
     let capture_client: IAudioCaptureClient = match audio_client.GetService() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[wasapi] Failed to get capture client: {}", e);
+            tracing::error!("[wasapi] Failed to get capture client: {}", e);
             return;
         }
     };
 
     if let Err(e) = audio_client.Start() {
-        eprintln!("[wasapi] Failed to start audio client: {}", e);
+        tracing::error!("[wasapi] Failed to start audio client: {}", e);
         return;
     }
 
@@ -241,15 +230,13 @@ unsafe fn run_capture_loop(
                 let pcm_data = convert_to_pcm_s16_16k(
                     buffer_ptr,
                     num_frames,
-                    source_rate,
                     source_channels,
                     bits_per_sample,
+                    resampler,
                 );
 
-                if !pcm_data.is_empty() {
-                    if sender.send(pcm_data).is_err() {
-                        break; // Receiver dropped
-                    }
+                if !pcm_data.is_empty() && sender.send(pcm_data).is_err() {
+                    break; // Receiver dropped
                 }
             }
         }
@@ -283,7 +270,7 @@ fn start_app_loopback(
             },
         };
 
-        // params must outlive prop_variant
+        // params is memcpy'd into the blob; only prop_variant must outlive activation
         let prop_variant = build_activation_propvariant(&params)?;
 
         // Sync channel for async completion handler
@@ -329,18 +316,20 @@ fn start_app_loopback(
             )
             .map_err(|e| format!("AudioClient Initialize failed: {}", e))?;
 
-        eprintln!(
+        tracing::info!(
             "[wasapi] Using Application Loopback (process exclusion) — own PID {} excluded",
             own_pid
         );
+
+        let mut resampler = Resampler::new(source_rate, TARGET_SAMPLE_RATE);
 
         run_capture_loop(
             &audio_client,
             &sender,
             &is_capturing,
-            source_rate,
             source_channels,
             bits_per_sample,
+            &mut resampler,
         );
 
         CoUninitialize();
@@ -356,22 +345,19 @@ fn start_legacy_loopback(sender: mpsc::Sender<Vec<u8>>, is_capturing: Arc<Atomic
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
-        let enumerator: IMMDeviceEnumerator = match CoCreateInstance(
-            &MMDeviceEnumerator,
-            None,
-            CLSCTX_ALL,
-        ) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("[wasapi] Failed to create device enumerator: {}", e);
-                return;
-            }
-        };
+        let enumerator: IMMDeviceEnumerator =
+            match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::error!("[wasapi] Failed to create device enumerator: {}", e);
+                    return;
+                }
+            };
 
         let device = match enumerator.GetDefaultAudioEndpoint(eRender, eConsole) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("[wasapi] Failed to get default audio endpoint: {}", e);
+                tracing::error!("[wasapi] Failed to get default audio endpoint: {}", e);
                 return;
             }
         };
@@ -379,7 +365,7 @@ fn start_legacy_loopback(sender: mpsc::Sender<Vec<u8>>, is_capturing: Arc<Atomic
         let audio_client: IAudioClient = match device.Activate(CLSCTX_ALL, None) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[wasapi] Failed to activate audio client: {}", e);
+                tracing::error!("[wasapi] Failed to activate audio client: {}", e);
                 return;
             }
         };
@@ -387,7 +373,7 @@ fn start_legacy_loopback(sender: mpsc::Sender<Vec<u8>>, is_capturing: Arc<Atomic
         let mix_format_ptr = match audio_client.GetMixFormat() {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("[wasapi] Failed to get mix format: {}", e);
+                tracing::error!("[wasapi] Failed to get mix format: {}", e);
                 return;
             }
         };
@@ -405,22 +391,24 @@ fn start_legacy_loopback(sender: mpsc::Sender<Vec<u8>>, is_capturing: Arc<Atomic
             mix_format_ptr,
             None,
         ) {
-            eprintln!(
+            tracing::error!(
                 "[wasapi] Failed to initialize audio client in loopback mode: {}",
                 e
             );
             return;
         }
 
-        eprintln!("[wasapi] Using legacy WASAPI loopback (no process exclusion)");
+        tracing::info!("[wasapi] Using legacy WASAPI loopback (no process exclusion)");
+
+        let mut resampler = Resampler::new(source_rate, TARGET_SAMPLE_RATE);
 
         run_capture_loop(
             &audio_client,
             &sender,
             &is_capturing,
-            source_rate,
             source_channels,
             bits_per_sample,
+            &mut resampler,
         );
 
         CoUninitialize();
@@ -431,13 +419,15 @@ fn start_legacy_loopback(sender: mpsc::Sender<Vec<u8>>, is_capturing: Arc<Atomic
 // PCM conversion helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convert raw WASAPI buffer to PCM s16le 16kHz mono
+/// Convert raw WASAPI buffer to PCM s16le 16kHz mono.
+/// Mixes all channels down to mono (average) and uses the shared filtered
+/// resampler so audio above 8 kHz is attenuated instead of aliasing.
 unsafe fn convert_to_pcm_s16_16k(
     buffer_ptr: *mut u8,
     num_frames: u32,
-    source_rate: u32,
     source_channels: u32,
     bits_per_sample: u16,
+    resampler: &mut Resampler,
 ) -> Vec<u8> {
     let frame_count = num_frames as usize;
 
@@ -449,27 +439,23 @@ unsafe fn convert_to_pcm_s16_16k(
         return Vec::new(); // Unsupported format
     };
 
-    // Take first channel only (mono)
-    let mono: Vec<f32> = f32_samples
-        .chunks(source_channels as usize)
-        .map(|frame| frame[0])
-        .collect();
+    let mono = resample::mixdown_f32(f32_samples, source_channels as usize);
+    resample::f32_to_s16le(&resampler.process(&mono))
+}
 
-    // Downsample to 16kHz
-    let ratio = source_rate as f64 / TARGET_SAMPLE_RATE as f64;
-    let output_len = (mono.len() as f64 / ratio) as usize;
-
-    let mut pcm_bytes: Vec<u8> = Vec::with_capacity(output_len * 2);
-
-    for i in 0..output_len {
-        let src_idx = (i as f64 * ratio) as usize;
-        if src_idx >= mono.len() {
-            break;
-        }
-        let sample = mono[src_idx].clamp(-1.0, 1.0);
-        let s16 = (sample * 32767.0) as i16;
-        pcm_bytes.extend_from_slice(&s16.to_le_bytes());
+/// Probe whether a default capture (microphone) device exists.
+/// Used by `check_permissions` — device presence is the practical failure
+/// mode on Windows; the OS-level mic privacy toggle can't be queried per-app.
+pub fn default_input_device_present() -> bool {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator: IMMDeviceEnumerator =
+            match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+                Ok(e) => e,
+                Err(_) => return false,
+            };
+        enumerator
+            .GetDefaultAudioEndpoint(eCapture, eConsole)
+            .is_ok()
     }
-
-    pcm_bytes
 }

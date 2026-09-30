@@ -29,12 +29,14 @@ http = "1"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
-keyring = "3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 pdf-extract = "0.7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 quick-xml = "0.37"
+tauri-plugin-dialog = "2"
 
 # Android: JNI bridge (MediaProjection system audio)
 [target.'cfg(target_os = "android")'.dependencies]

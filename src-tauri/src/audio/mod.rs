@@ -1,4 +1,9 @@
-#[cfg(not(target_os = "android"))]
+pub mod resample;
+
+#[cfg(target_family = "unix")]
+pub mod cpal_mic;
+
+#[cfg(target_os = "windows")]
 pub mod microphone;
 
 #[cfg(target_os = "android")]
@@ -10,12 +15,12 @@ pub mod system_audio;
 #[cfg(target_os = "windows")]
 pub mod wasapi;
 
-// Re-export MicCapture per platform
-#[cfg(not(target_os = "android"))]
+// Re-export MicCapture per platform: WASAPI on Windows, cpal elsewhere.
+#[cfg(target_os = "windows")]
 pub use microphone::MicCapture;
 
-#[cfg(target_os = "android")]
-pub use android::MicCapture;
+#[cfg(target_family = "unix")]
+pub use cpal_mic::MicCapture;
 
 // Re-export SystemAudioCapture from the correct platform module
 #[cfg(target_os = "android")]

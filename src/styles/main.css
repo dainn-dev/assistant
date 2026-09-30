@@ -14,7 +14,10 @@
 
 :root {
   /* Color Palette */
-  --bg-primary: rgba(15, 15, 20, 0.88);
+  /* --overlay-alpha is driven by the Background opacity setting so only the
+     card's translucency changes — text and controls stay fully opaque. */
+  --overlay-alpha: 0.88;
+  --bg-primary: rgba(15, 15, 20, var(--overlay-alpha));
   --bg-secondary: rgba(25, 25, 35, 0.92);
   --bg-glass: rgba(30, 30, 45, 0.65);
   --bg-input: rgba(40, 40, 55, 0.7);
@@ -243,6 +246,14 @@ body {
   pointer-events: none;
 }
 
+/* Status dot + text hidden: the session chip (REC / Draft / Saved) carries
+   all the state info — keeping the bar minimal. Elements stay in the DOM
+   because _updateStatus() still writes to them. */
+#status-indicator,
+#status-text {
+  display: none;
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -287,6 +298,112 @@ body {
   font-weight: 500;
   color: var(--text-muted);
   letter-spacing: 0.02em;
+}
+
+/* Session chip — pill that makes session lifecycle visible:
+   recording (elapsed) / draft (unsaved lines) / saved.
+   Floats at the bottom-right corner so it doesn't crowd the control bar. */
+.session-chip {
+  position: fixed;
+  right: 10px;
+  bottom: 10px;
+  z-index: 60;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.session-chip.recording {
+  color: var(--error);
+  background: rgba(248, 113, 113, 0.15);
+  animation: pulse 1.5s infinite;
+}
+
+.session-chip.draft {
+  color: var(--warning);
+  background: rgba(251, 191, 36, 0.13);
+}
+
+.session-chip.saved {
+  color: var(--success);
+  background: rgba(74, 222, 128, 0.12);
+}
+
+/* Quick "+ New" text button — the primary session action next to record */
+.quick-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-glow);
+  color: var(--accent-hover);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.quick-new-btn:hover {
+  background: rgba(99, 140, 255, 0.28);
+  color: #fff;
+}
+
+.quick-new-btn:active {
+  transform: scale(0.95);
+}
+
+/* More menu — secondary actions (copy, open folder) */
+.more-menu-wrap {
+  position: relative;
+  display: flex;
+}
+
+.more-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 180px;
+  padding: 4px;
+  background: rgba(25, 25, 35, 0.97);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 100;
+}
+
+.more-menu.open {
+  display: block;
+}
+
+.more-menu .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.more-menu .menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 /* Source Controls */
@@ -343,16 +460,6 @@ body {
   cursor: pointer;
   transition: all var(--transition-fast);
   -webkit-app-region: no-drag;
-}
-
-.action-btn.end-session-btn {
-  background: rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.9);
-}
-
-.action-btn.end-session-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-  box-shadow: none;
 }
 
 .action-btn:hover {
@@ -510,32 +617,53 @@ body {
   z-index: 20;
 }
 
-.chat-controls {
-  position: absolute;
-  right: 12px;
-  bottom: calc(8px + 32px + 6px); /* input padding + min-height + gap */
+/* Read-only banner — visible while replaying a saved conversation */
+#readonly-banner {
+  flex-shrink: 0;
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(99, 140, 255, 0.10);
+  border-bottom: 1px solid rgba(99, 140, 255, 0.18);
+}
+
+#readonly-banner button {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-hover);
+  background: rgba(99, 140, 255, 0.15);
+  border: 1px solid rgba(99, 140, 255, 0.30);
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+#readonly-banner button:hover {
+  background: rgba(99, 140, 255, 0.28);
+}
+
+/* Display controls — transcript font size & color, toggled via Aa button */
+#display-controls {
+  display: none;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(10px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--transition-fast);
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.15);
 }
 
-#chat-panel:hover .chat-controls,
-.chat-input-row:hover .chat-controls,
-.chat-input-row:focus-within .chat-controls {
-  opacity: 1;
-  pointer-events: auto;
+#display-controls.visible {
+  display: flex;
 }
 
-.chat-controls .font-controls {
+#display-controls .font-controls {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -544,7 +672,7 @@ body {
   padding: 2px 4px;
 }
 
-.chat-controls .color-controls {
+#display-controls .color-controls {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -634,11 +762,11 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.chat-controls .float-btn {
+#display-controls .float-btn {
   height: 26px;
 }
 
-.chat-controls .font-size-label {
+#display-controls .font-size-label {
   min-width: 20px;
 }
 

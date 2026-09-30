@@ -1,5 +1,5 @@
-use crate::audio::SystemAudioCapture;
 use crate::audio::MicCapture;
+use crate::audio::SystemAudioCapture;
 use serde::Serialize;
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -20,7 +20,8 @@ pub struct AudioForwarder {
 
 impl AudioForwarder {
     fn stop(&self) {
-        self.stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.stop_flag
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -88,13 +89,17 @@ pub fn start_capture(
             // Forward system audio to merged channel
             std::thread::spawn(move || {
                 while let Ok(data) = sys_rx.recv() {
-                    if tx1.send(data).is_err() { break; }
+                    if tx1.send(data).is_err() {
+                        break;
+                    }
                 }
             });
             // Forward mic audio to merged channel
             std::thread::spawn(move || {
                 while let Ok(data) = mic_rx.recv() {
-                    if tx2.send(data).is_err() { break; }
+                    if tx2.send(data).is_err() {
+                        break;
+                    }
                 }
             });
 
@@ -182,13 +187,57 @@ fn stop_capture_inner(state: &AudioState) {
     }
 }
 
-/// Check audio capture permissions
+/// Check audio capture permissions.
+///
+/// Probes what is actually knowable per platform:
+/// - Windows: WASAPI loopback needs no consent; mic reports whether a default
+///   capture device exists (the OS mic-privacy toggle can't be queried
+///   per-app — a denied stream fails at capture time with a visible error).
+/// - macOS: `SCShareableContent::get()` fails when Screen Recording is denied;
+///   mic reports input-device presence (TCC prompt fires on first stream open).
+/// - Android/Linux: presence probes where meaningful, otherwise "unknown".
 #[tauri::command]
 pub fn check_permissions() -> PermissionStatus {
-    // Note: Actual permission checking on macOS requires Objective-C interop
-    // For now, we return "unknown" and permissions will be prompted on first use
-    PermissionStatus {
-        screen_recording: "unknown".to_string(),
-        microphone: "unknown".to_string(),
+    #[cfg(target_os = "windows")]
+    {
+        PermissionStatus {
+            screen_recording: "granted".to_string(),
+            microphone: if crate::audio::wasapi::default_input_device_present() {
+                "granted".to_string()
+            } else {
+                "denied".to_string()
+            },
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use cpal::traits::HostTrait;
+        PermissionStatus {
+            screen_recording: match screencapturekit::prelude::SCShareableContent::get() {
+                Ok(_) => "granted".to_string(),
+                Err(_) => "denied".to_string(),
+            },
+            microphone: match cpal::default_host().default_input_device() {
+                Some(_) => "granted".to_string(),
+                None => "denied".to_string(),
+            },
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        #[cfg(target_os = "android")]
+        let microphone = "unknown".to_string(); // MediaProjection/record perms handled by OS dialogs
+        #[cfg(not(target_os = "android"))]
+        let microphone = {
+            use cpal::traits::HostTrait;
+            match cpal::default_host().default_input_device() {
+                Some(_) => "granted".to_string(),
+                None => "denied".to_string(),
+            }
+        };
+        PermissionStatus {
+            screen_recording: "unknown".to_string(),
+            microphone,
+        }
     }
 }

@@ -9,37 +9,49 @@ use audio::MicCapture;
 use audio::SystemAudioCapture;
 use commands::audio::AudioState;
 use commands::local_pipeline::LocalPipelineState;
-use settings::{Settings, SettingsState};
 use db::InterviewDb;
+use settings::{Settings, SettingsState};
 use std::sync::Mutex;
 use tauri::Manager;
 
 #[tauri::command]
 fn get_platform_info() -> String {
     format!(
-        r#"{{"os":"{}","arch":"{}","version":"0.3.0"}}"#,
+        r#"{{"os":"{}","arch":"{}","version":"{}"}}"#,
         std::env::consts::OS,
-        std::env::consts::ARCH
+        std::env::consts::ARCH,
+        env!("CARGO_PKG_VERSION")
     )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    eprintln!("[boot] myjavis starting...");
+    // Structured logging — RUST_LOG controls verbosity (default: info).
+    // API keys are never logged; keep it that way when adding fields.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+    tracing::info!("myjavis starting...");
+
     // Load settings from disk (or defaults)
     let initial_settings = Settings::load();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            eprintln!("[boot] tauri setup...");
+            tracing::info!("tauri setup...");
             let handle = app.handle().clone();
-            let conn = db::open_connection(&handle)
-                .map_err(|e| format!("assistant DB init: {e}"))?;
+            let conn =
+                db::open_connection(&handle).map_err(|e| format!("assistant DB init: {e}"))?;
             app.manage(InterviewDb(Mutex::new(conn)));
             #[cfg(desktop)]
             {
-                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
             }
             Ok(())
@@ -64,6 +76,7 @@ pub fn run() {
             commands::transcript::open_transcript_dir,
             commands::transcript::list_transcripts,
             commands::transcript::read_transcript,
+            commands::transcript::read_transcript_segments,
             commands::transcript::delete_transcript,
             commands::local_pipeline::start_local_pipeline,
             commands::local_pipeline::send_audio_to_pipeline,
