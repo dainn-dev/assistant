@@ -51,7 +51,7 @@ class App {
         this._lastSavedAt = null;      // set when a session save succeeds
 
         // Chat UI (UI-only) — input posts into subtitle timeline
-        this.currentTemplate = null; // 'Interview' | 'Meeting' | null
+        this.currentTemplate = null; // 'Interview' | null
         this._interviewCvFile = null;
         this._interviewJdFile = null;
         this._interviewSuggestTimer = null;

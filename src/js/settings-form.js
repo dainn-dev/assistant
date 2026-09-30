@@ -365,7 +365,7 @@ export const settingsFormMethods = {
         const st = document.getElementById('select-suggestion-type')?.value || 'translation';
         settings.suggestion_type = ['target', 'translation', 'both'].includes(st) ? st : 'translation';
         const am = document.getElementById('select-app-mode')?.value || '';
-        settings.app_mode = ['Interview', 'Meeting'].includes(am) ? am : '';
+        settings.app_mode = am === 'Interview' ? am : '';
         settings.early_suggestions = document.getElementById('check-early-suggestions')?.checked === true;
 
         try {

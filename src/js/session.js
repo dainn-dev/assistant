@@ -291,7 +291,7 @@ export const sessionMethods = {
         };
         sonioxClient.connect(sonioxConfig);
 
-        // Split mode: Interview/Meeting + System&Mic keeps the two audio
+        // Split mode: Interview + System&Mic keeps the two audio
         // sources on independent recognition streams so the app always knows
         // who is speaking (system = interviewer, mic = candidate).
         const useSplit = this.currentSource === 'both' && this._isSuggestionsMode();

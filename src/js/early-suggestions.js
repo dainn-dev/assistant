@@ -238,7 +238,6 @@ export const earlySuggestionMethods = {
                     userId: this._getInterviewUserId(),
                     transcriptContext: snapshot,
                     userDraft: null,
-                    appMode: 'Interview',
                     contextSnippets: snippets,
                 },
                 requestId,

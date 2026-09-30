@@ -105,7 +105,7 @@ pub struct Settings {
     pub pinecone_api_key: String,
     /// Interview suggestions language mode: "target" (source_language), "translation", "both"
     pub suggestion_type: String,
-    /// App mode: "Interview" | "Meeting" | "" (none)
+    /// App mode: "Interview" | "" (none)
     /// Frontend sends null; tolerate it as the default.
     #[serde(deserialize_with = "deserialize_null_default")]
     pub app_mode: String,

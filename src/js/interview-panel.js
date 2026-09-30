@@ -9,21 +9,19 @@ const { listen } = window.__TAURI__.event;
 export const interviewPanelMethods = {
 
     _isSuggestionsMode() {
-        return this.currentTemplate === 'Interview' || this.currentTemplate === 'Meeting';
+        return this.currentTemplate === 'Interview';
     }
 ,
 
 
     _suggestionsPanelTitle() {
-        return this.currentTemplate === 'Meeting' ? 'Suggestions' : 'Suggested answers';
+        return 'Suggested answers';
     }
 ,
 
 
     _suggestionsEmptyText() {
-        return this.currentTemplate === 'Meeting'
-            ? 'Waiting for conversation context…'
-            : 'Waiting for interviewer question…';
+        return 'Waiting for interviewer question…';
     }
 ,
 
@@ -65,29 +63,6 @@ export const interviewPanelMethods = {
 ,
 
 
-    _suggestionKindLabel(kind) {
-        const labels = {
-            talking_point: 'Talking Point',
-            clarifying_question: 'Clarifying Question',
-            action_item: 'Action Item',
-        };
-        return labels[kind] || '';
-    }
-,
-
-
-    _prependSuggestionKindLabel(li, item) {
-        if (this.currentTemplate !== 'Meeting') return;
-        const label = this._suggestionKindLabel(item.suggestion_kind);
-        if (!label) return;
-        const el = document.createElement('span');
-        el.className = 'suggestion-chip-kind';
-        el.textContent = label;
-        li.insertBefore(el, li.firstChild);
-    }
-,
-
-
     _setTemplateMode(mode) {
         const prevMode = this.currentTemplate;
         this.currentTemplate = mode || null;
@@ -96,8 +71,8 @@ export const interviewPanelMethods = {
             prevMode !== this.currentTemplate
             && prevMode
             && this.currentTemplate
-            && (prevMode === 'Interview' || prevMode === 'Meeting')
-            && (this.currentTemplate === 'Interview' || this.currentTemplate === 'Meeting')
+            && prevMode === 'Interview'
+            && this.currentTemplate === 'Interview'
         ) {
             this._clearSuggestionsPanel();
         }
@@ -744,7 +719,6 @@ export const interviewPanelMethods = {
                     const li = document.createElement('li');
                     li.className = 'suggestion-chip-row';
                     li.dataset.face = 'target';
-                    this._prependSuggestionKindLabel(li, item);
                     const btn = document.createElement('button');
                     btn.type = 'button';
                     btn.className = 'suggestion-chip';
@@ -802,7 +776,6 @@ export const interviewPanelMethods = {
                 if (!text.trim()) return;
                 const li = document.createElement('li');
                 li.className = 'suggestion-chip-row';
-                this._prependSuggestionKindLabel(li, item);
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'suggestion-chip';
@@ -851,7 +824,6 @@ export const interviewPanelMethods = {
                     userId: this._getInterviewUserId(),
                     transcriptContext: transcriptContext || null,
                     userDraft: userDraft || null,
-                    appMode: settingsManager.get().app_mode || this.currentTemplate || null,
                 },
             });
             if (gen !== this._interviewSuggestGen) return;
@@ -940,7 +912,6 @@ export const interviewPanelMethods = {
                 const li = document.createElement('li');
                 li.className = 'suggestion-chip-row';
                 li.dataset.face = 'target';
-                this._prependSuggestionKindLabel(li, item);
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'suggestion-chip';
@@ -988,7 +959,6 @@ export const interviewPanelMethods = {
             if (!text.trim()) return;
             const li = document.createElement('li');
             li.className = 'suggestion-chip-row';
-            this._prependSuggestionKindLabel(li, item);
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'suggestion-chip';
@@ -1013,7 +983,7 @@ export const interviewPanelMethods = {
             list.appendChild(li);
         });
 
-        // For Interview/Meeting template, show suggestions in a split right panel (subtitle stays visible on the left).
+        // For Interview template, show suggestions in a split right panel (subtitle stays visible on the left).
         this._dockInterviewSuggestionsRight();
     }
 ,
