@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, State};
 use uuid::Uuid;
 
 const INGEST_CHUNK_MAX_CHARS: usize = 1200;
@@ -116,6 +116,35 @@ pub struct SuggestInterviewAnswersRequest {
     pub debug: Option<bool>,
     #[serde(default)]
     pub app_mode: Option<String>,
+    /// Pre-selected CV/JD excerpts (from `select_context_excerpts`) — the
+    /// early path skips embedding+Pinecone and grounds on these directly.
+    #[serde(default)]
+    pub context_snippets: Option<Vec<String>>,
+}
+
+/// Cancellation registry for in-flight suggestion streams. Each request gets
+/// a flag; `cancel_suggestion_stream` flips it and the streaming loop checks
+/// it between chunks.
+pub struct SuggestStreamState {
+    pub cancels: std::sync::Mutex<HashMap<u32, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+impl Default for SuggestStreamState {
+    fn default() -> Self {
+        Self {
+            cancels: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+/// Events pushed to the frontend over the request's IPC channel.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamEvent {
+    pub request_id: u32,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1021,6 +1050,142 @@ Interviewer's question / task focus:\n\
     };
 
     Ok(SuggestInterviewAnswersResponse { suggestions, debug })
+}
+
+/// Abort an in-flight suggestion stream. Unknown/stale request ids are
+/// no-ops so a late cancel can never kill a newer request.
+#[tauri::command]
+pub fn cancel_suggestion_stream(request_id: u32, streams: State<'_, SuggestStreamState>) {
+    if let Ok(map) = streams.cancels.lock() {
+        if let Some(flag) = map.get(&request_id) {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// Early-hint path: stream 2–3 plain-text talking points while the
+/// interviewer is still speaking. Skips embedding + Pinecone — the frontend
+/// passes pre-selected excerpts via `req.context_snippets`.
+#[tauri::command]
+pub async fn suggest_interview_answers_stream(
+    db: State<'_, InterviewDb>,
+    settings: State<'_, SettingsState>,
+    streams: State<'_, SuggestStreamState>,
+    req: SuggestInterviewAnswersRequest,
+    request_id: u32,
+    channel: Channel<StreamEvent>,
+) -> Result<(), String> {
+    let (llm_url, llm_model, source_language, target_language, suggestion_type) = {
+        let g = settings.0.lock().map_err(|e| e.to_string())?;
+        (
+            g.llm_url.clone(),
+            g.llm_model.clone(),
+            g.source_language.clone(),
+            g.target_language.clone(),
+            g.suggestion_type.clone(),
+        )
+    };
+    let llm_key = secrets::get_secret(SecretSlot::Llm)?.unwrap_or_default();
+    if llm_url.trim().is_empty() {
+        return Err("LLM URL not configured — fill it in Settings → AI.".to_string());
+    }
+    if llm_model.trim().is_empty() {
+        return Err("LLM model not configured — fill it in Settings → AI.".to_string());
+    }
+    if llm_key.trim().is_empty() {
+        return Err("LLM API key not set — add it in Settings → AI.".to_string());
+    }
+
+    let send = |kind: &str, text: Option<String>| {
+        let _ = channel.send(StreamEvent {
+            request_id,
+            kind: kind.to_string(),
+            text,
+        });
+    };
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut map = streams.cancels.lock().map_err(|e| e.to_string())?;
+        map.insert(request_id, cancel.clone());
+    }
+
+    send("start", None);
+
+    let question = req.transcript_context.clone().unwrap_or_default();
+    if question.trim().chars().count() < 8 {
+        send("insufficient", None);
+        if let Ok(mut map) = streams.cancels.lock() {
+            map.remove(&request_id);
+        }
+        return Ok(());
+    }
+
+    // Recent dialogue gives the model conversational context around the
+    // partial question — bounded to the last few lines.
+    let recent_lines = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        db::recent_messages(&conn, &req.user_id, 4)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|(role, content, _)| format!("- [{role}] {content}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let ctx_block = req
+        .context_snippets
+        .clone()
+        .unwrap_or_default()
+        .join("\n---\n");
+
+    // Hints render in the language the user reads: suggestion language for
+    // 'translation'/'both', interview language for 'target'.
+    let hint_lang = if normalized_suggestion_type(&suggestion_type) == "target" {
+        &source_language
+    } else {
+        &target_language
+    };
+
+    let prompt = format!(
+        "You are coaching a candidate during a live interview. The interviewer's question may be INCOMPLETE — it is still being transcribed. Answer based only on what is clear so far.\n\
+Rules:\n\
+- Give 2-3 short talking points, each under 20 words, in language code {hint_lang}.\n\
+- Ground points in the CV/JD excerpts when relevant; never invent experience that is not there.\n\
+- If the question is too vague to answer, give one line on what to listen for or clarify.\n\
+- Plain text only — one point per line starting with \"- \". No JSON, no preamble.\n\n\
+CV/JD excerpts (may be empty):\n{ctx_block}\n\n\
+Recent dialogue (may be empty):\n{recent_lines}\n\n\
+Interviewer question so far (may be incomplete):\n{question}\n",
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let result = llm::complete_suggestions_stream(
+        &client,
+        &llm_url,
+        &llm_key,
+        &llm_model,
+        &prompt,
+        cancel,
+        |delta| send("delta", Some(delta)),
+    )
+    .await;
+
+    if let Ok(mut map) = streams.cancels.lock() {
+        map.remove(&request_id);
+    }
+
+    match result {
+        Ok(full) => send("done", Some(full)),
+        Err(e) if e == "__cancelled__" => send("cancelled", None),
+        Err(e) => send("error", Some(e)),
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -65,6 +65,7 @@ pub fn run() {
         .manage(LocalPipelineState {
             process: Mutex::new(None),
         })
+        .manage(commands::interview::SuggestStreamState::default())
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -92,6 +93,8 @@ pub fn run() {
             commands::interview::ingest_interview_files,
             commands::interview::save_interview_message,
             commands::interview::suggest_interview_answers,
+            commands::interview::suggest_interview_answers_stream,
+            commands::interview::cancel_suggestion_stream,
             get_platform_info,
         ])
         .run(tauri::generate_context!())
