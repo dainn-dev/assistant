@@ -1087,16 +1087,6 @@ body {
   gap: 6px;
 }
 
-.interview-suggestions-list .suggestion-chip-kind {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: rgba(96, 165, 250, 0.85);
-}
-
 .interview-suggestions-list .suggestion-chip-row {
   position: relative;
   display: block;
