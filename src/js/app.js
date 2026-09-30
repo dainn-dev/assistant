@@ -24,6 +24,7 @@ import { windowMethods } from './window.js';
 import { updaterMethods } from './updater-ui.js';
 import { shortcutMethods } from './shortcuts.js';
 import { interviewPanelMethods } from './interview-panel.js';
+import { earlySuggestionMethods } from './early-suggestions.js';
 
 class App {
     constructor() {
@@ -98,6 +99,7 @@ class App {
         this.transcriptUI = new TranscriptUI(transcriptContainer);
         this.transcriptUI.onChange = () => this._updateSessionChip();
         this.transcriptUI.onAfterRender = () => this._injectBrainstormButton();
+        this._earlyInit();
 
         // Check platform — hide Local MLX on non-Apple-Silicon
         await this._checkPlatformSupport();
@@ -529,6 +531,9 @@ class App {
 
         client.onOriginal = (text, speaker, language) => {
             this.transcriptUI.addOriginal(text, speaker, language, source);
+            // A finalized system segment closes the interviewer's turn —
+            // lets the scheduler fire one last refinement on the full text.
+            if (source === 'system') this._early?.endpoint('system');
         };
 
         client.onTranslation = (text) => {
@@ -631,7 +636,7 @@ class App {
 }
 
 // Methods split into sibling modules are merged onto the prototype here.
-Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods);
+Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods);
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {

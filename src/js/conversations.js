@@ -31,6 +31,7 @@ export const conversationMethods = {
         }
 
         this.readOnlyMode = true;
+        this._earlyBumpEpoch?.();
         const banner = document.getElementById('readonly-banner');
         if (banner) banner.style.display = 'flex';
         this._updateControlsForMode();

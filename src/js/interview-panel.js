@@ -91,6 +91,7 @@ export const interviewPanelMethods = {
     _setTemplateMode(mode) {
         const prevMode = this.currentTemplate;
         this.currentTemplate = mode || null;
+        if (prevMode !== this.currentTemplate) this._earlyBumpEpoch?.();
         if (
             prevMode !== this.currentTemplate
             && prevMode

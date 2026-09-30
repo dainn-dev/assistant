@@ -259,6 +259,10 @@ export const sessionMethods = {
             await this._startSonioxMode(settings);
         }
 
+        // Early-suggestion scheduler polls the system-source transcript
+        // while recording — self-gates on the setting inside the tick.
+        this._earlyStartTicker?.();
+
         // Start TTS if enabled
         if (this.ttsEnabled) {
             const tts = this._getActiveTTS();
@@ -656,6 +660,10 @@ export const sessionMethods = {
         this.isRunning = false;
         this._updateStartButton();
         this._updateControlsForMode();
+        // Invalidate any in-flight early-suggestion stream, but keep the
+        // visible card — stopping is a pause, not a discard.
+        this._earlyStopTicker?.();
+        this._early?.bumpEpoch();
 
         try {
             await invoke('stop_capture');
@@ -707,6 +715,7 @@ export const sessionMethods = {
 
     _createNewSession() {
         this.readOnlyMode = false;
+        this._earlyBumpEpoch?.();
         const banner = document.getElementById('readonly-banner');
         if (banner) banner.style.display = 'none';
         this.activeConversationFilename = null;

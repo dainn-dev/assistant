@@ -909,6 +909,59 @@ body {
   margin-bottom: 6px;
 }
 
+.early-hold-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 215, 0, 0.5);
+  color: #ffd700;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.early-hold-btn:hover {
+  background: rgba(255, 215, 0, 0.15);
+}
+
+.early-hold-btn.early-resume {
+  border-color: rgba(100, 200, 100, 0.5);
+  color: #7dd87d;
+}
+
+.early-hold-btn.early-resume:hover {
+  background: rgba(100, 200, 100, 0.15);
+}
+
+.early-hint-card {
+  padding: 6px 10px;
+  margin: 0 0 6px;
+  border: 1px dashed rgba(255, 215, 0, 0.4);
+  border-radius: 6px;
+  background: rgba(255, 215, 0, 0.06);
+  font-size: calc(var(--app-font-size, 16px) * 0.85);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.early-hint-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.5);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.early-hint-text {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .interview-suggestions-status {
   flex: 1;
   margin-left: 10px;
