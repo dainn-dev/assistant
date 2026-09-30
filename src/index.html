@@ -125,6 +125,12 @@
           </svg>
         </button>
 
+        <button id="btn-hide-controls" class="icon-btn" title="Hide control bar">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="6 15 12 9 18 15" />
+          </svg>
+        </button>
+
         <button id="btn-minimize" class="icon-btn" title="Minimize to taskbar">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="5" y1="12" x2="19" y2="12" />
@@ -139,6 +145,13 @@
         </button>
       </div>
     </div>
+
+    <!-- Restore handle: shown only when the control bar is hidden -->
+    <button id="btn-show-controls" class="controls-restore" title="Show controls" style="display:none">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="6 9 12 15 18 9" />
+      </svg>
+    </button>
 
     <!-- Read-only banner: shown when replaying a saved conversation -->
     <div id="readonly-banner" style="display:none">

@@ -251,6 +251,17 @@ class App {
             this._togglePin();
         });
 
+        // Hide/show the control bar — when hidden a small handle stays at the
+        // top edge to bring it back (transcript stays draggable).
+        document.getElementById('btn-hide-controls')?.addEventListener('click', () => {
+            document.body.classList.add('controls-hidden');
+            document.getElementById('btn-show-controls').style.display = '';
+        });
+        document.getElementById('btn-show-controls')?.addEventListener('click', () => {
+            document.body.classList.remove('controls-hidden');
+            document.getElementById('btn-show-controls').style.display = 'none';
+        });
+
         // Font size quick controls
         document.getElementById('btn-font-up').addEventListener('click', () => this._adjustFontSize(4));
         document.getElementById('btn-font-down').addEventListener('click', () => this._adjustFontSize(-4));
