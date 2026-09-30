@@ -272,6 +272,8 @@ export const settingsFormMethods = {
             const v = s.suggestion_type || 'translation';
             suggestionType.value = ['target', 'translation', 'both'].includes(v) ? v : 'translation';
         }
+        const earlyEl = document.getElementById('check-early-suggestions');
+        if (earlyEl) earlyEl.checked = s.early_suggestions === true;
 
         // TTS provider
         const providerSelect = document.getElementById('select-tts-provider');
@@ -364,9 +366,19 @@ export const settingsFormMethods = {
         settings.suggestion_type = ['target', 'translation', 'both'].includes(st) ? st : 'translation';
         const am = document.getElementById('select-app-mode')?.value || '';
         settings.app_mode = ['Interview', 'Meeting'].includes(am) ? am : '';
+        settings.early_suggestions = document.getElementById('check-early-suggestions')?.checked === true;
 
         try {
             await settingsManager.save(settings);
+            // Enabling early suggestions kills live TTS — system audio would
+            // transcribe the app's own narration back into the transcript.
+            if (settings.early_suggestions && this.ttsEnabled) {
+                this.ttsEnabled = false;
+                this._getActiveTTS().disconnect();
+                audioPlayer.stop();
+                this._updateTTSButton();
+                this._showToast('TTS narration turned off — early suggestions is active', 'success');
+            }
             this._settingsSnapshot = null; // saved — Back/Escape must not prompt
             this._showToast('Settings saved', 'success');
             this._showView('overlay');

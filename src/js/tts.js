@@ -23,6 +23,13 @@ export const ttsMethods = {
             return;
         }
 
+        // Early suggestions capture system audio — TTS playback would loop
+        // back into the recognition stream and pollute the transcript.
+        if (this._earlySuggestionsEligible?.()) {
+            this._showToast('TTS is off while Early suggestions is active', 'error');
+            return;
+        }
+
         // Check API key for premium providers
         if (provider === 'elevenlabs' && !settings.elevenlabs_api_key) {
             this._showToast('Add ElevenLabs API key in Settings → TTS', 'error');
@@ -53,7 +60,8 @@ export const ttsMethods = {
             audioPlayer.stop();
             this._showToast('TTS narration OFF 🔇', 'success');
         }
-    },
+    }
+,
 
 
     _getActiveTTS() {
@@ -62,7 +70,8 @@ export const ttsMethods = {
         if (provider === 'elevenlabs') return elevenLabsTTS;
         if (provider === 'google') return googleTTS;
         return edgeTTSRust;
-    },
+    }
+,
 
 
     _configureTTS(tts, settings) {
@@ -87,7 +96,8 @@ export const ttsMethods = {
                 speed: settings.edge_tts_speed !== undefined ? settings.edge_tts_speed : 20,
             });
         }
-    },
+    }
+,
 
 
     _updateTTSButton() {
@@ -103,13 +113,15 @@ export const ttsMethods = {
         }
         if (iconOff) iconOff.style.display = this.ttsEnabled ? 'none' : 'block';
         if (iconOn) iconOn.style.display = this.ttsEnabled ? 'block' : 'none';
-    },
+    }
+,
 
 
     _speakIfEnabled(text) {
         if (this.ttsEnabled && text?.trim()) {
             this._getActiveTTS().speak(text);
         }
-    },
+    }
+,
 
 };

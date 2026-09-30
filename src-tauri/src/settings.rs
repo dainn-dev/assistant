@@ -109,6 +109,9 @@ pub struct Settings {
     /// Frontend sends null; tolerate it as the default.
     #[serde(deserialize_with = "deserialize_null_default")]
     pub app_mode: String,
+    /// Proactively stream answer hints while the interviewer is still
+    /// speaking (Interview mode, Soniox + system/mic audio only).
+    pub early_suggestions: bool,
 }
 
 impl Default for Settings {
@@ -150,6 +153,7 @@ impl Default for Settings {
             pinecone_api_key: String::new(),
             suggestion_type: "translation".to_string(),
             app_mode: "Interview".to_string(),
+            early_suggestions: false,
         }
     }
 }
@@ -311,7 +315,8 @@ mod tests {
             "llm_api_key": "llm-key",
             "pinecone_api_key": "pc-key",
             "suggestion_type": "both",
-            "app_mode": "Interview"
+            "app_mode": "Interview",
+            "early_suggestions": true
         }"#;
         let s: Settings = serde_json::from_str(json).expect("payload must deserialize");
 
@@ -325,6 +330,7 @@ mod tests {
         assert_eq!(s.pinecone_api_key, "pc-key");
         assert_eq!(s.app_mode, "Interview");
         assert_eq!(s.suggestion_type, "both");
+        assert!(s.early_suggestions);
     }
 
     #[test]

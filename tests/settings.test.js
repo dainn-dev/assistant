@@ -36,6 +36,18 @@ describe('settingsManager', () => {
     expect(settingsManager.get().font_size).toBe(22);
   });
 
+  it('round-trips the early_suggestions flag', async () => {
+    invoke.mockResolvedValueOnce(null);
+    await settingsManager.save({ early_suggestions: true });
+    expect(invoke).toHaveBeenCalledWith(
+      'save_settings',
+      expect.objectContaining({
+        newSettings: expect.objectContaining({ early_suggestions: true }),
+      })
+    );
+    expect(settingsManager.get().early_suggestions).toBe(true);
+  });
+
   it('save() propagates backend errors', async () => {
     invoke.mockRejectedValueOnce('Unknown settings field(s): bogus');
     await expect(settingsManager.save({ bogus: 1 })).rejects.toMatch(/Unknown settings field/);
