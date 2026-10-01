@@ -323,6 +323,16 @@ pub(crate) fn extract_json_array_slice(text: &str) -> Option<&str> {
     Some(&text[start..=end])
 }
 
+/// First `{..last }` span — for LLM outputs that must be a JSON object.
+pub(crate) fn extract_json_object_slice(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(&text[start..=end])
+}
+
 fn line_fallback_suggestion_strings(text: &str) -> Vec<String> {
     text.lines()
         .map(|l| l.trim().trim_start_matches(['-', '•']).trim().to_string())
