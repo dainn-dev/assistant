@@ -61,3 +61,4 @@ scripts/test_*.py
 .private/
 GEMINI.md
 CLAUDE.md
+scripts/app.js.pre-split.bak
