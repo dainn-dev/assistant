@@ -682,10 +682,20 @@ pub fn suggest_interview_answers(
         return Err("LLM API key not set — add it in Settings → AI.".to_string());
     }
 
-    // ── Interview path (unchanged) ────────────────────────────────────────────
-    if pine_key.trim().is_empty() {
-        return Err("Pinecone API key not set — add it in Settings → AI.".to_string());
-    }
+    // ── Interview path ────────────────────────────────────────────────────────
+    // Fast path: pre-selected local excerpts (select_context_excerpts) mean no
+    // embedding call and no Pinecone round-trip — and no Pinecone key needed.
+    // Pinecone remains the fallback only when no snippets were provided.
+    let local_snips: Vec<String> = req
+        .context_snippets
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    let use_local_excerpts = !local_snips.is_empty();
+
+    require_context_source(!use_local_excerpts, &pine_key)?;
 
     let db_path = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
@@ -713,10 +723,6 @@ pub fn suggest_interview_answers(
     let recent = recent?;
     let summary = summary_opt?.unwrap_or_default();
 
-    if pinecone_host.trim().is_empty() {
-        return Err("Pinecone host not configured.".to_string());
-    }
-
     let client = http_client()?;
 
     let mut query_bits: Vec<String> = Vec::new();
@@ -736,40 +742,49 @@ pub fn suggest_interview_answers(
         query_bits.join("\n\n")
     };
 
-    let emb_url = embeddings::embeddings_url_from_llm_url(&llm_url);
-    let (query_vec, qdim) = embeddings::embed_batch_prefer_openai(
-        &client,
-        &emb_url,
-        &llm_key,
-        std::slice::from_ref(&query_text),
-        Some(expected_dim),
-    )?;
-    if qdim != expected_dim {
-        return Err(format!(
-            "Embedding dimension mismatch: got {qdim}, settings {expected_dim}."
-        ));
-    }
-    let qv = query_vec.into_iter().next().ok_or("no query vector")?;
+    let context_snips: Vec<String> = if use_local_excerpts {
+        local_snips
+    } else {
+        if pinecone_host.trim().is_empty() {
+            return Err("Pinecone host not configured.".to_string());
+        }
 
-    let matches = query_top_k(
-        &client,
-        &pinecone_host,
-        &pine_key,
-        Some(&req.user_id),
-        qv,
-        4,
-    )?;
+        let emb_url = embeddings::embeddings_url_from_llm_url(&llm_url);
+        let (query_vec, qdim) = embeddings::embed_batch_prefer_openai(
+            &client,
+            &emb_url,
+            &llm_key,
+            std::slice::from_ref(&query_text),
+            Some(expected_dim),
+        )?;
+        if qdim != expected_dim {
+            return Err(format!(
+                "Embedding dimension mismatch: got {qdim}, settings {expected_dim}."
+            ));
+        }
+        let qv = query_vec.into_iter().next().ok_or("no query vector")?;
 
-    let mut context_snips: Vec<String> = Vec::new();
-    for m in &matches {
-        if let Some(meta) = &m.metadata {
-            if let Some(serde_json::Value::String(s)) = meta.get("content") {
-                if !s.trim().is_empty() {
-                    context_snips.push(s.clone());
+        let matches = query_top_k(
+            &client,
+            &pinecone_host,
+            &pine_key,
+            Some(&req.user_id),
+            qv,
+            4,
+        )?;
+
+        let mut snips: Vec<String> = Vec::new();
+        for m in &matches {
+            if let Some(meta) = &m.metadata {
+                if let Some(serde_json::Value::String(s)) = meta.get("content") {
+                    if !s.trim().is_empty() {
+                        snips.push(s.clone());
+                    }
                 }
             }
         }
-    }
+        snips
+    };
 
     let mut recent_lines = String::new();
     for (role, content, _) in recent {
@@ -828,8 +843,13 @@ Interviewer's question / task focus:\n\
 
     let debug = if req.debug == Some(true) {
         Some(format!(
-            "pinecone_matches={}, llm_model={}, prompt_chars={}",
-            matches.len(),
+            "context_source={}, context_snips={}, llm_model={}, prompt_chars={}",
+            if use_local_excerpts {
+                "local"
+            } else {
+                "pinecone"
+            },
+            context_snips.len(),
             llm_model,
             prompt.len()
         ))
@@ -838,6 +858,14 @@ Interviewer's question / task focus:\n\
     };
 
     Ok(SuggestInterviewAnswersResponse { suggestions, debug })
+}
+
+/// Pinecone is only required when the request carries no local excerpts.
+fn require_context_source(needs_pinecone: bool, pine_key: &str) -> Result<(), String> {
+    if needs_pinecone && pine_key.trim().is_empty() {
+        return Err("Pinecone API key not set — add it in Settings → AI.".to_string());
+    }
+    Ok(())
 }
 
 /// Lexical relevance score: normalized token-overlap count between the query
@@ -1133,6 +1161,20 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].translation, "x");
         assert_eq!(items[0].target, "");
+    }
+
+    #[test]
+    fn pinecone_key_not_required_when_local_excerpts_present() {
+        // needs_pinecone=false → any key state is fine
+        assert!(require_context_source(false, "").is_ok());
+        assert!(require_context_source(false, "pc-key").is_ok());
+    }
+
+    #[test]
+    fn pinecone_key_required_only_for_fallback_path() {
+        assert!(require_context_source(true, "").is_err());
+        assert!(require_context_source(true, "   ").is_err());
+        assert!(require_context_source(true, "pc-key").is_ok());
     }
 
     #[test]
