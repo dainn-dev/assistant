@@ -234,6 +234,7 @@ export const earlySuggestionMethods = {
     _earlyFire(snapshot, meta) {
         const requestId = ++this._earlyRequestSeq;
         this._earlyRequestTurn.set(requestId, meta);
+        this._llmCalls = (this._llmCalls || 0) + 1;
         this._earlyMetrics?.mark('hint_fired', {
             requestId,
             turnId: meta?.turnId,

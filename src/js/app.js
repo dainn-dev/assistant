@@ -81,6 +81,9 @@ class App {
         this._settingsSnapshot = null; // JSON snapshot of the settings form for dirty detection
         this._sessionFilename = null;  // transcript file backing the current session (autosave overwrites)
         this._savedSessionJson = null; // sessionLog snapshot at last successful save — dirty detection
+        this._sonioxSec = { system: 0, mic: 0 }; // billed audio seconds per stream
+        this._llmCalls = 0;                    // suggestion requests this session
+        this._lastSessionMetrics = null;       // summary of the most recent saved session
     }
 
     async init() {

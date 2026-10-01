@@ -319,6 +319,7 @@ export const sessionMethods = {
                     }
                     // Forward batched audio to Soniox
                     const bytes = new Uint8Array(pcmData);
+                    if (this._sonioxSec) this._sonioxSec.system += bytes.length / 32000;
                     sonioxClient.sendAudio(bytes.buffer);
                 };
 
@@ -346,12 +347,14 @@ export const sessionMethods = {
         const systemChannel = new window.__TAURI__.core.Channel();
         systemChannel.onmessage = (pcmData) => {
             const bytes = new Uint8Array(pcmData);
+            if (this._sonioxSec) this._sonioxSec.system += bytes.length / 32000;
             sonioxClient.sendAudio(bytes.buffer);
         };
 
         const micChannel = new window.__TAURI__.core.Channel();
         micChannel.onmessage = (pcmData) => {
             const bytes = new Uint8Array(pcmData);
+            if (this._sonioxSec) this._sonioxSec.mic += bytes.length / 32000;
             sonioxMicClient.sendAudio(bytes.buffer);
         };
 
@@ -729,6 +732,8 @@ export const sessionMethods = {
         this._earlyMetrics = new SessionMetrics();
         this._earlyMicMarked = false;
         this._earlyTokenSeen?.clear();
+        this._sonioxSec = { system: 0, mic: 0 };
+        this._llmCalls = 0;
         if (this._chipTimer) {
             clearInterval(this._chipTimer);
             this._chipTimer = null;
@@ -793,13 +798,13 @@ export const sessionMethods = {
             chip.style.display = '';
             chip.className = 'session-chip recording';
             chip.textContent = `● REC ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
-            chip.title = `${lines} line${lines === 1 ? '' : 's'} captured so far`;
+            chip.title = `${lines} line${lines === 1 ? '' : 's'} captured so far${this._costTooltip()}`;
             this._chipTimer = setInterval(() => this._updateSessionChip(), 1000);
         } else if (lines > 0 || hasProvisional) {
             chip.style.display = '';
             chip.className = 'session-chip draft';
             chip.textContent = `⏸ Draft · ${lines} line${lines === 1 ? '' : 's'}`;
-            chip.title = 'Not saved to a file yet — press "+ New" (or close the app) to save';
+            chip.title = `Not saved to a file yet — press "+ New" (or close the app) to save${this._costTooltip()}`;
         } else if (this._lastSavedAt) {
             chip.style.display = '';
             chip.className = 'session-chip saved';
@@ -812,6 +817,16 @@ export const sessionMethods = {
         if (newBtn) {
             newBtn.textContent = (this.isRunning || lines > 0 || hasProvisional) ? 'Save & New' : '+ New';
         }
+    }
+,
+
+    _costTooltip() {
+        if (!this._sonioxSec) return '';
+        const fmt = (sec) => {
+            const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+            return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        };
+        return ` · Soniox sys ${fmt(this._sonioxSec.system)} mic ${fmt(this._sonioxSec.mic)} · LLM ${this._llmCalls || 0} calls`;
     }
 ,
 
@@ -896,7 +911,13 @@ export const sessionMethods = {
                 segments: {
                     version: 2,
                     segments: this.transcriptUI.sessionLog,
-                    metrics: this._earlyMetrics?.summary() || null,
+                    metrics: this._earlyMetrics
+                        ? {
+                            ...this._earlyMetrics.summary(),
+                            sonioxSec: this._sonioxSec,
+                            llmCalls: this._llmCalls || 0,
+                        }
+                        : null,
                 },
                 filename: this._sessionFilename, // null → new timestamped file
             });
@@ -905,6 +926,13 @@ export const sessionMethods = {
             this._sessionFilename = filename;
             this._savedSessionJson = JSON.stringify(this.transcriptUI.sessionLog);
             this._lastSavedAt = Date.now();
+            this._lastSessionMetrics = this._earlyMetrics
+                ? {
+                    ...this._earlyMetrics.summary(),
+                    sonioxSec: { ...this._sonioxSec },
+                    llmCalls: this._llmCalls || 0,
+                }
+                : null;
             this._updateSessionChip();
             this._showToast(`Saved: ${filename}`, 'success');
             // A freshly created file should appear in the sidebar immediately

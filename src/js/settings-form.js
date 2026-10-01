@@ -149,6 +149,48 @@ export const settingsFormMethods = {
     }
 ,
 
+    /// Render the last session's early-suggestion metrics inside Settings → AI.
+    _renderEarlyStats() {
+        const wrap = document.getElementById('early-stats');
+        const body = document.getElementById('early-stats-body');
+        if (!wrap || !body) return;
+        const m = this._lastSessionMetrics;
+        if (!m) { wrap.style.display = 'none'; return; }
+        wrap.style.display = '';
+
+        const ms = (v) => (v ? `${(v / 1000).toFixed(1)}s` : '—');
+        const fmt = (sec) => {
+            const mm = Math.floor((sec || 0) / 60), ss = Math.floor((sec || 0) % 60);
+            return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+        };
+        const rows = [
+            ['First hint latency', ms(m.ttfhMs)],
+            ['vs question end', m.ttfhAfterEndpointMs ? ms(m.ttfhAfterEndpointMs) : '—'],
+            ['Hints fired / useful / cancelled', `${m.hintsFired} / ${m.hintsUseful} / ${m.hintsCancelled}`],
+            ['Peak requests/min', String(m.peakReqPerMin || 0)],
+            ['Soniox audio (sys / mic)', `${fmt(m.sonioxSec?.system)} / ${fmt(m.sonioxSec?.mic)}`],
+            ['LLM calls', String(m.llmCalls || 0)],
+        ];
+        body.innerHTML = '';
+        for (const [k, v] of rows) {
+            const dt = document.createElement('dt');
+            dt.textContent = k;
+            const dd = document.createElement('dd');
+            dd.textContent = v;
+            body.append(dt, dd);
+        }
+
+        const copyBtn = document.getElementById('btn-copy-early-stats');
+        if (copyBtn && !copyBtn._bound) {
+            copyBtn._bound = true;
+            copyBtn.addEventListener('click', () => {
+                navigator.clipboard?.writeText(JSON.stringify(this._lastSessionMetrics, null, 2));
+                this._showToast('Stats copied', 'success');
+            });
+        }
+    }
+,
+
     _populateSettingsForm() {
         this._initLanguageSelects();
         const s = settingsManager.get();
@@ -274,6 +316,7 @@ export const settingsFormMethods = {
         }
         const earlyEl = document.getElementById('check-early-suggestions');
         if (earlyEl) earlyEl.checked = s.early_suggestions === true;
+        this._renderEarlyStats();
 
         // TTS provider
         const providerSelect = document.getElementById('select-tts-provider');

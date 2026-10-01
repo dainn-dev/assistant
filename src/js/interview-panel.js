@@ -819,6 +819,7 @@ export const interviewPanelMethods = {
         try {
             // If we didn't get a speaker/draft marker for some reason, start timing here.
             if (!this._interviewSuggestPerf.t0) this._markInterviewSuggestStart(null);
+            this._llmCalls = (this._llmCalls || 0) + 1;
             const res = await invoke('suggest_interview_answers', {
                 req: {
                     userId: this._getInterviewUserId(),

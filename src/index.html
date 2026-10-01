@@ -599,6 +599,11 @@
             </label>
             <p class="hint">Interview mode + Soniox + System or System+Mic audio. Streams extra LLM calls, so it raises API cost. Disables TTS narration while active.</p>
           </div>
+          <details id="early-stats" class="early-stats" style="display:none">
+            <summary>Early-suggestion stats (last session)</summary>
+            <dl id="early-stats-body" class="early-stats-body"></dl>
+            <button type="button" id="btn-copy-early-stats" class="menu-item">Copy as JSON</button>
+          </details>
         </div>
 
         <!-- Section: Pinecone -->
