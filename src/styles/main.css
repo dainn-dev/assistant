@@ -737,80 +737,6 @@ body.controls-hidden #drag-region {
   flex: 0 0 auto;
 }
 
-.chat-template .template-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  box-sizing: border-box;
-  height: 100%;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-light);
-  background: var(--bg-input);
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.chat-template .template-trigger:hover {
-  border-color: rgba(255, 255, 255, 0.22);
-}
-
-.chat-template .template-trigger:focus {
-  outline: none;
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 2px rgba(99, 140, 255, 0.1);
-}
-
-.chat-template .template-trigger[aria-expanded="true"] {
-  border-color: rgba(255, 255, 255, 0.22);
-}
-
-.chat-template .template-caret {
-  font-size: 11px;
-  opacity: 0.8;
-  transform: translateY(-0.5px);
-}
-
-.chat-template .template-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  min-width: 160px;
-  padding: 6px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(10, 12, 18, 0.96);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  display: none;
-  z-index: 60;
-}
-
-.chat-template .template-menu.open {
-  display: block;
-}
-
-.chat-template .template-item {
-  width: 100%;
-  text-align: left;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.90);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.chat-template .template-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 #display-controls .float-btn {
   height: 26px;
 }
@@ -840,25 +766,6 @@ body.controls-hidden #drag-region {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
-}
-
-.chat-input-wrap .chat-template {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-}
-
-.chat-input-wrap .chat-template .template-trigger {
-  height: auto;
-  min-height: 32px;
-  padding: 0 10px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.22);
-  border-color: rgba(255, 255, 255, 0.14);
-}
-
-.chat-input-wrap .chat-template .template-menu {
-  left: 0;
 }
 
 .interview-uploads {
@@ -935,15 +842,6 @@ body.controls-hidden #drag-region {
   border: 1px solid rgba(255, 255, 255, 0.1);
   max-height: 140px;
   overflow-y: auto;
-}
-
-.interview-suggestions-panel.collapsed {
-  max-height: none;
-  overflow: hidden;
-}
-
-.interview-suggestions-panel.collapsed .interview-suggestions-list {
-  display: none;
 }
 
 .interview-suggestions-header {

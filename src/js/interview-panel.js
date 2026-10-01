@@ -101,10 +101,6 @@ export const interviewPanelMethods = {
         document.body.classList.toggle('interview-active', this.currentTemplate === 'Interview');
         document.body.classList.toggle('suggestions-active', this._isSuggestionsMode());
 
-        // Update dropdown label
-        const templateLabel = document.querySelector('#btn-template .template-trigger-label');
-        if (templateLabel) templateLabel.textContent = this.currentTemplate || 'Template';
-
         const uploads = document.getElementById('interview-uploads');
         if (uploads) uploads.style.display = this.currentTemplate === 'Interview' ? '' : 'none';
         const sugPanel = document.getElementById('interview-suggestions-panel');
@@ -359,55 +355,6 @@ export const interviewPanelMethods = {
         });
 
         this._updateInterviewUploadPills();
-    }
-,
-
-
-    _initTemplateDropdown() {
-        const trigger = document.getElementById('btn-template');
-        const menu = document.getElementById('menu-template');
-        const input = document.getElementById('chat-input');
-        if (!trigger || !menu || !input) return;
-
-        const setOpen = (open) => {
-            if (open) {
-                menu.classList.add('open');
-                trigger.setAttribute('aria-expanded', 'true');
-                menu.setAttribute('aria-hidden', 'false');
-            } else {
-                menu.classList.remove('open');
-                trigger.setAttribute('aria-expanded', 'false');
-                menu.setAttribute('aria-hidden', 'true');
-            }
-        };
-
-        const isOpen = () => menu.classList.contains('open');
-
-        trigger.addEventListener('click', (e) => {
-            e.preventDefault();
-            setOpen(!isOpen());
-        });
-
-        // Select mode on item click (no textbox insertion)
-        menu.querySelectorAll('.template-item').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                this._setTemplateMode(btn.textContent?.trim() || null);
-                input.focus();
-                setOpen(false);
-            });
-        });
-
-        // Close when clicking outside
-        document.addEventListener('mousedown', (e) => {
-            const dropdown = document.getElementById('template-dropdown');
-            if (!dropdown) return;
-            if (!dropdown.contains(e.target)) setOpen(false);
-        });
-
-        // Close on Esc
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') setOpen(false);
-        });
     }
 ,
 

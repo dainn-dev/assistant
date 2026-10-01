@@ -22,8 +22,7 @@ body.mobile .action-btn,
 body.mobile .source-btn,
 body.mobile .tts-action-btn,
 body.mobile .float-btn,
-body.mobile .upload-btn,
-body.mobile .template-trigger {
+body.mobile .upload-btn {
   min-height: 48px;
   min-width: 48px;
 }
