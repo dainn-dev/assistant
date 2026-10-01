@@ -49,7 +49,8 @@ export const conversationMethods = {
         try {
             // Prefer the structured sidecar; fall back to markdown parsing
             // for transcripts saved before sidecars existed.
-            let segments = await invoke('read_transcript_segments', { filename });
+            let raw = await invoke('read_transcript_segments', { filename });
+            let segments = Array.isArray(raw) ? raw : raw?.segments;
             if (!Array.isArray(segments)) {
                 const text = await invoke('read_transcript', { filename });
                 segments = this._parseSavedTranscriptToSegments(text);

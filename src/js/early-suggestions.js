@@ -6,6 +6,7 @@
 // interviewer turn, ≤20 starts per rolling minute, ≥1.5s between starts.
 
 import { settingsManager } from './settings.js';
+import { SessionMetrics } from './metrics.js';
 
 const { invoke } = window.__TAURI__.core;
 
@@ -24,10 +25,11 @@ function _isMeaningful(text) {
 }
 
 export class EarlyScheduler {
-    constructor({ now = () => Date.now(), fire = () => 0, cancel = () => {} } = {}) {
+    constructor({ now = () => Date.now(), fire = () => 0, cancel = () => {}, onEvent = () => {} } = {}) {
         this._now = now;
         this._fire = fire;
         this._cancel = cancel;
+        this._onEvent = onEvent;
 
         this.epoch = 0;
         this.turnId = 0;
@@ -60,10 +62,14 @@ export class EarlyScheduler {
                 // Meaning changed mid-question — in-flight answer is stale.
                 this.revision++;
                 if (this.inFlightId != null) {
-                    this._cancel(this.inFlightId);
+                    this._cancel(this.inFlightId, 'correction');
                     this.inFlightId = null;
                 }
                 this.pendingSnapshot = null;
+            }
+            if (!this._lastSnapshot) {
+                // First speech of a new turn — metrics anchor.
+                this._onEvent('question_start', { turnId: this.turnId });
             }
             this._lastSnapshot = norm;
             this._stableCount = 1;
@@ -78,6 +84,7 @@ export class EarlyScheduler {
     /** Interviewer finished a turn (endpoint detection / finalized segment). */
     endpoint(source) {
         if (source !== 'system') return;
+        this._onEvent('endpoint', { turnId: this.turnId });
         const norm = this._lastSnapshot;
         // One final fire if the last stable text was never sent.
         if (norm && norm !== this._lastFiredSnapshot) {
@@ -143,7 +150,7 @@ export class EarlyScheduler {
     bumpEpoch() {
         this.epoch++;
         if (this.inFlightId != null) {
-            this._cancel(this.inFlightId);
+            this._cancel(this.inFlightId, 'epoch');
             this.inFlightId = null;
         }
         this.pendingSnapshot = null;
@@ -163,9 +170,16 @@ export const earlySuggestionMethods = {
 
 
     _earlyInit() {
+        this._earlyMetrics = new SessionMetrics();
+        this._earlyMicMarked = false;
+        this._earlyTokenSeen = new Set(); // requestIds that already streamed a first delta
         this._early = new EarlyScheduler({
             fire: (snap, meta) => this._earlyFire(snap, meta),
-            cancel: (id) => this._earlyCancel(id),
+            cancel: (id, reason) => this._earlyCancel(id, reason),
+            onEvent: (event, payload) => {
+                this._earlyMetrics.mark(event, payload);
+                if (event === 'endpoint') this._earlyMicMarked = false;
+            },
         });
         this._earlyRequestSeq = 0;
         this._earlyRequestTurn = new Map(); // requestId → {epoch, turnId}
@@ -207,6 +221,12 @@ export const earlySuggestionMethods = {
         const lastLine = committed.split('\n').pop() || '';
         const snapshot = (lastLine + ' ' + (ui.provisionalBySource.system.text || '')).trim();
         this._early.observe(snapshot, 'system');
+
+        // Candidate speech marker — first mic provisional since last endpoint.
+        if (!this._earlyMicMarked && ui.provisionalBySource?.mic?.text) {
+            this._earlyMicMarked = true;
+            this._earlyMetrics?.mark('mic_speech_start', { turnId: this._early.turnId });
+        }
     }
 ,
 
@@ -214,6 +234,12 @@ export const earlySuggestionMethods = {
     _earlyFire(snapshot, meta) {
         const requestId = ++this._earlyRequestSeq;
         this._earlyRequestTurn.set(requestId, meta);
+        this._earlyMetrics?.mark('hint_fired', {
+            requestId,
+            turnId: meta?.turnId,
+            revision: meta?.revision,
+            snapshotLen: snapshot.length,
+        });
 
         const channel = new window.__TAURI__.core.Channel();
         channel.onmessage = (ev) => this._earlyOnEvent(requestId, ev);
@@ -254,9 +280,10 @@ export const earlySuggestionMethods = {
 ,
 
 
-    _earlyCancel(requestId) {
+    _earlyCancel(requestId, reason = 'unknown') {
         invoke('cancel_suggestion_stream', { requestId }).catch(() => {});
         this._earlyRequestTurn.delete(requestId);
+        this._earlyMetrics?.mark('hint_cancelled', { requestId, reason });
     }
 ,
 
@@ -268,6 +295,13 @@ export const earlySuggestionMethods = {
 
         switch (ev.kind) {
             case 'delta':
+                if (!this._earlyTokenSeen?.has(requestId)) {
+                    this._earlyTokenSeen?.add(requestId);
+                    this._earlyMetrics?.mark('hint_first_token', {
+                        requestId,
+                        turnId: meta.turnId,
+                    });
+                }
                 if (this._earlyHold === 'none') {
                     this._earlyAppendDraft(ev.text || '');
                 }
@@ -275,6 +309,11 @@ export const earlySuggestionMethods = {
             case 'done':
                 this._earlyRequestTurn.delete(requestId);
                 this._early.requestDone(requestId);
+                this._earlyMetrics?.mark('hint_done', {
+                    requestId,
+                    turnId: meta.turnId,
+                    chars: (ev.text || '').length,
+                });
                 if (this._earlyHold === 'none') {
                     this._earlyPromoteDraft(ev.text || '');
                 }

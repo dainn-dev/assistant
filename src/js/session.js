@@ -6,6 +6,7 @@ import { sonioxClient, sonioxMicClient } from './soniox.js';
 import { elevenLabsTTS } from './elevenlabs-tts.js';
 import { edgeTTSRust } from './edge-tts.js';
 import { audioPlayer } from './audio-player.js';
+import { SessionMetrics } from './metrics.js';
 
 const { invoke } = window.__TAURI__.core;
 
@@ -725,6 +726,9 @@ export const sessionMethods = {
         this._sessionFilename = null;
         this._savedSessionJson = null;
         this._lastSavedAt = null;
+        this._earlyMetrics = new SessionMetrics();
+        this._earlyMicMarked = false;
+        this._earlyTokenSeen?.clear();
         if (this._chipTimer) {
             clearInterval(this._chipTimer);
             this._chipTimer = null;
@@ -888,7 +892,12 @@ export const sessionMethods = {
         try {
             const path = await invoke('save_transcript', {
                 content,
-                segments: this.transcriptUI.sessionLog,
+                // versioned envelope — bare arrays mean "legacy, segments only"
+                segments: {
+                    version: 2,
+                    segments: this.transcriptUI.sessionLog,
+                    metrics: this._earlyMetrics?.summary() || null,
+                },
                 filename: this._sessionFilename, // null → new timestamped file
             });
             const filename = path.split(/[\\/]/).pop();
