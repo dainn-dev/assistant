@@ -14,7 +14,7 @@ Hướng dẫn từng bước cài đặt và sử dụng **MyJavis** trên Wind
 
 ## Bước 1 — Tải xuống
 
-Tải file `.exe` mới nhất tại: [**Releases — Windows**](https://github.com/phuc-nt/my-translator/releases/latest)
+Tải file `.exe` mới nhất tại: [**Releases — Windows**](https://github.com/dainn-dev/assistant/releases/latest)
 
 Chọn phiên bản phù hợp:
 - **x64** — Đa số PC Windows (Intel/AMD)

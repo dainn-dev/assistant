@@ -15,7 +15,7 @@ Step-by-step guide to install and use **MyJavis** on macOS.
 
 ## Step 1 — Download
 
-Download the latest `.dmg` from: [**Releases — macOS**](https://github.com/phuc-nt/my-translator/releases/latest)
+Download the latest `.dmg` from: [**Releases — macOS**](https://github.com/dainn-dev/assistant/releases/latest)
 
 Choose the right file:
 - `MyJavis_x.x.x_aarch64.dmg` — Apple Silicon (M1/M2/M3/M4)
