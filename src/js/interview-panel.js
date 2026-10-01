@@ -134,7 +134,6 @@ export const interviewPanelMethods = {
         if (this.isMobile) return;
         const panel = document.getElementById('interview-suggestions-panel');
         const right = document.getElementById('right-panel');
-        const resizer = document.getElementById('right-panel-resizer');
         const contentArea = document.getElementById('content-area');
         if (!panel || !right || !contentArea) return;
 
@@ -149,51 +148,9 @@ export const interviewPanelMethods = {
         }
 
         right.style.display = '';
-        if (resizer) resizer.style.display = '';
         contentArea.classList.add('split-suggestions');
         panel.classList.add('docked-right');
         this._suggestionsDock.docked = true;
-
-        this._initRightPanelResizer();
-    }
-,
-
-
-    _initRightPanelResizer() {
-        const resizer = document.getElementById('right-panel-resizer');
-        const right = document.getElementById('right-panel');
-        const contentArea = document.getElementById('content-area');
-        if (!resizer || !right || !contentArea || resizer._resizerBound) return;
-        resizer._resizerBound = true;
-
-        // Restore saved width
-        const saved = localStorage.getItem('rightPanelWidth');
-        if (saved) right.style.width = saved;
-
-        resizer.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            resizer.classList.add('dragging');
-            const startX = e.clientX;
-            const startW = right.getBoundingClientRect().width;
-            const totalW = contentArea.getBoundingClientRect().width;
-            const maxW = Math.floor(totalW * 0.5);
-
-            const onMove = (ev) => {
-                const dx = startX - ev.clientX; // drag left = wider panel
-                const newW = Math.min(maxW, Math.max(200, startW + dx));
-                right.style.width = newW + 'px';
-            };
-
-            const onUp = () => {
-                resizer.classList.remove('dragging');
-                localStorage.setItem('rightPanelWidth', right.style.width);
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('mouseup', onUp);
-            };
-
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
-        });
     }
 ,
 
@@ -206,6 +163,7 @@ export const interviewPanelMethods = {
         this._rightPanelCollapsed = !!collapsed;
         contentArea.classList.toggle('right-panel-collapsed', this._rightPanelCollapsed);
         btnOpen.style.display = this._rightPanelCollapsed ? '' : 'none';
+        btnOpen.setAttribute('aria-expanded', String(!this._rightPanelCollapsed));
         btnClose.style.display = this._rightPanelCollapsed ? 'none' : '';
     }
 ,
@@ -241,10 +199,12 @@ export const interviewPanelMethods = {
             }
         }
 
-        const resizer = document.getElementById('right-panel-resizer');
-        if (resizer) resizer.style.display = 'none';
         right.style.display = 'none';
         contentArea.classList.remove('split-suggestions');
+        contentArea.classList.remove('right-panel-collapsed');
+        this._rightPanelCollapsed = false;
+        const btnOpen = document.getElementById('btn-open-suggestions');
+        if (btnOpen) btnOpen.style.display = 'none';
         this._suggestionsDock.docked = false;
     }
 ,

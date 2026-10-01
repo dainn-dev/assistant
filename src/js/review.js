@@ -83,14 +83,18 @@ export const reviewMethods = {
     _reviewShow() {
         const panel = document.getElementById('review-panel');
         const right = document.getElementById('right-panel');
-        const resizer = document.getElementById('right-panel-resizer');
         const contentArea = document.getElementById('content-area');
         const suggestions = document.getElementById('interview-suggestions-panel');
         if (!panel || !right) return;
         panel.hidden = false;
         right.style.display = '';
-        if (resizer && !this.isMobile) resizer.style.display = '';
         contentArea?.classList.add('split-suggestions');
+        // Review takes over the whole right panel — clear the suggestions
+        // collapsed state so the panel isn't hidden.
+        contentArea?.classList.remove('right-panel-collapsed');
+        this._rightPanelCollapsed = false;
+        const btnOpen = document.getElementById('btn-open-suggestions');
+        if (btnOpen) btnOpen.style.display = 'none';
         if (suggestions) suggestions.style.display = 'none';
     }
 ,
@@ -105,13 +109,11 @@ export const reviewMethods = {
         // the panel entirely when nothing else needs it.
         const suggestions = document.getElementById('interview-suggestions-panel');
         const right = document.getElementById('right-panel');
-        const resizer = document.getElementById('right-panel-resizer');
         const contentArea = document.getElementById('content-area');
         if (this._suggestionsDock?.docked && suggestions) {
             suggestions.style.display = '';
         } else {
             if (right) right.style.display = 'none';
-            if (resizer) resizer.style.display = 'none';
             contentArea?.classList.remove('split-suggestions');
             contentArea?.classList.remove('right-panel-collapsed');
         }

@@ -101,10 +101,10 @@ body.mobile #chat-panel {
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
 
-/* Hide desktop right panel/resizer on mobile — except when it hosts the
-   full-screen review overlay */
+/* Hide desktop right panel + floating handle on mobile — except when it
+   hosts the full-screen review overlay */
 body.mobile #right-panel,
-body.mobile #right-panel-resizer {
+body.mobile .suggestions-restore {
   display: none !important;
 }
 

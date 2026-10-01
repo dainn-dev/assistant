@@ -294,8 +294,7 @@ class App {
         // Close Interview suggestions panel
         document.getElementById('btn-close-suggestions')?.addEventListener('click', () => {
             this._interviewSuggestionsClosed = true;
-            // Collapse instead of fully hiding so the "Suggestions" open button
-            // stays in the same header position as the close button.
+            // Hide the panel; a floating edge handle reopens it.
             const panel = document.getElementById('interview-suggestions-panel');
             if (panel) panel.style.display = '';
             if (this.isMobile) {

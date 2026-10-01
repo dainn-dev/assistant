@@ -184,9 +184,6 @@
         </div>
       </div>
 
-      <!-- Resize handle between transcript and right panel -->
-      <div id="right-panel-resizer" class="right-panel-resizer" style="display:none"></div>
-
       <!-- Right panel (used for Interview suggestions when docked) -->
       <div id="right-panel" class="right-panel" style="display:none" aria-label="Right panel">
         <!-- Post-session review, docked in read-only mode -->
@@ -208,6 +205,13 @@
           </div>
         </section>
       </div>
+
+      <!-- Floating handle to reopen the right panel -->
+      <button type="button" id="btn-open-suggestions" class="suggestions-restore" style="display:none" title="Show suggestions" aria-label="Show suggestions panel" aria-expanded="false">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
     </div>
 
     <!-- Display controls: text size & color, toggled by the Aa button -->
@@ -242,12 +246,7 @@
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                   </svg>
                 </button>
-                <button type="button" id="btn-open-suggestions" class="interview-suggestions-open" style="display:none" title="Open panel" aria-label="Open panel">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </button>
-                <button type="button" id="btn-close-suggestions" class="interview-suggestions-close" aria-label="Close panel">×</button>
+                <button type="button" id="btn-close-suggestions" class="interview-suggestions-close" title="Hide suggestions" aria-label="Hide suggestions panel">×</button>
               </div>
             </div>
             <p id="interview-suggestions-empty" class="interview-suggestions-empty" hidden>Waiting for interviewer question…</p>
