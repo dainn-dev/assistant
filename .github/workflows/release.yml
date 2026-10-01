@@ -9,8 +9,19 @@ permissions:
   contents: write
 
 jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test -- --run
+
   build-macos:
     runs-on: macos-14  # Apple Silicon runner
+    continue-on-error: true  # optional until APPLE_* secrets exist
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +56,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri app (signed + notarized)
         env:
@@ -69,6 +80,7 @@ jobs:
 
   build-macos-intel:
     runs-on: macos-14  # Cross-compile to Intel
+    continue-on-error: true  # optional until APPLE_* secrets exist
     steps:
       - uses: actions/checkout@v4
 
@@ -105,7 +117,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri app (Intel, signed + notarized)
         env:
@@ -127,6 +139,7 @@ jobs:
             src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
 
   build-windows:
+    needs: gates
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,7 +158,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri app
         env:
@@ -165,6 +178,7 @@ jobs:
 
   build-android:
     runs-on: ubuntu-latest
+    continue-on-error: true  # optional; unsigned without keystore secrets
     steps:
       - uses: actions/checkout@v4
 
@@ -234,7 +248,10 @@ jobs:
             src-tauri/gen/android/**/outputs/**/*.aab
 
   release:
-    needs: [build-macos, build-macos-intel, build-windows, build-android]
+    needs: [build-windows, build-macos, build-macos-intel, build-android]
+    # Optional platform jobs may fail (missing signing secrets); a release is
+    # still cut as long as Windows — the primary target — succeeded.
+    if: ${{ !cancelled() && needs.build-windows.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -245,12 +262,14 @@ jobs:
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: macos-build
           path: artifacts/macos
 
       - name: Download macOS Intel artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: macos-intel-build
           path: artifacts/macos-intel
@@ -263,6 +282,7 @@ jobs:
 
       - name: Download Android artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: android-build
           path: artifacts/android
@@ -293,43 +313,51 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          # Read signatures
-          DARWIN_AARCH64_SIG=$(cat artifacts/macos/macos/*_aarch64.app.tar.gz.sig 2>/dev/null || echo "")
-          DARWIN_X86_64_SIG=$(cat artifacts/macos-intel/macos/*_x64.app.tar.gz.sig 2>/dev/null || echo "")
-          WINDOWS_X86_64_SIG=$(cat artifacts/windows/nsis/*.exe.sig 2>/dev/null || echo "")
-
           REPO="https://github.com/dainn-dev/assistant/releases/download/v${VERSION}"
 
-          # Find actual filenames
-          DARWIN_AARCH64_FILE=$(ls artifacts/macos/macos/*_aarch64.app.tar.gz 2>/dev/null | head -1 | xargs basename || echo "")
-          DARWIN_X86_64_FILE=$(ls artifacts/macos-intel/macos/*_x64.app.tar.gz 2>/dev/null | head -1 | xargs basename || echo "")
-          WINDOWS_X86_64_FILE=$(ls artifacts/windows/nsis/*.exe 2>/dev/null | head -1 | xargs basename || echo "")
+          # A platform only enters latest.json when both its artifact and its
+          # signature exist — unsigned or skipped builds are omitted entirely.
+          PLATFORMS=""
+          add_platform() {
+            local key="$1" file="$2" sig="$3"
+            if [ -n "$file" ] && [ -n "$sig" ]; then
+              [ -n "$PLATFORMS" ] && PLATFORMS="${PLATFORMS},"
+              PLATFORMS="${PLATFORMS}
+              \"${key}\": { \"signature\": \"${sig}\", \"url\": \"${REPO}/${file}\" }"
+            fi
+          }
+
+          f=$(ls artifacts/macos/macos/*_aarch64.app.tar.gz 2>/dev/null | head -1 || true)
+          s=$(cat artifacts/macos/macos/*_aarch64.app.tar.gz.sig 2>/dev/null | tr -d '[:space:]' || true)
+          add_platform "darwin-aarch64" "$(basename "$f" 2>/dev/null)" "$s"
+
+          f=$(ls artifacts/macos-intel/macos/*_x64.app.tar.gz 2>/dev/null | head -1 || true)
+          s=$(cat artifacts/macos-intel/macos/*_x64.app.tar.gz.sig 2>/dev/null | tr -d '[:space:]' || true)
+          add_platform "darwin-x86_64" "$(basename "$f" 2>/dev/null)" "$s"
+
+          f=$(ls artifacts/windows/nsis/*.exe 2>/dev/null | head -1 || true)
+          s=$(cat artifacts/windows/nsis/*.exe.sig 2>/dev/null | tr -d '[:space:]' || true)
+          add_platform "windows-x86_64" "$(basename "$f" 2>/dev/null)" "$s"
+
+          if [ -z "$PLATFORMS" ]; then
+            echo "No signed updater artifacts were produced — refusing to write an empty latest.json."
+            exit 1
+          fi
 
           cat > artifacts/latest.json << EOF
           {
             "version": "${VERSION}",
             "notes": "See release notes at https://github.com/dainn-dev/assistant/releases/tag/v${VERSION}",
             "pub_date": "${DATE}",
-            "platforms": {
-              "darwin-aarch64": {
-                "signature": "${DARWIN_AARCH64_SIG}",
-                "url": "${REPO}/${DARWIN_AARCH64_FILE}"
-              },
-              "darwin-x86_64": {
-                "signature": "${DARWIN_X86_64_SIG}",
-                "url": "${REPO}/${DARWIN_X86_64_FILE}"
-              },
-              "windows-x86_64": {
-                "signature": "${WINDOWS_X86_64_SIG}",
-                "url": "${REPO}/${WINDOWS_X86_64_FILE}"
-              }
+            "platforms": {${PLATFORMS}
             }
           }
           EOF
 
           echo "Generated latest.json:"
           cat artifacts/latest.json
+          node -e "JSON.parse(require('fs').readFileSync('artifacts/latest.json','utf8'))" 2>/dev/null \
+            || python -c "import json;json.load(open('artifacts/latest.json'))"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
