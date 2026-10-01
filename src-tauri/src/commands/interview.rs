@@ -306,7 +306,7 @@ fn chunk_text_with_overlap(text: &str, max_chars: usize, overlap: usize) -> Vec<
     out
 }
 
-fn http_client() -> Result<reqwest::blocking::Client, String> {
+pub(crate) fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(30))
@@ -314,7 +314,7 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-fn extract_json_array_slice(text: &str) -> Option<&str> {
+pub(crate) fn extract_json_array_slice(text: &str) -> Option<&str> {
     let start = text.find('[')?;
     let end = text.rfind(']')?;
     if end <= start {
