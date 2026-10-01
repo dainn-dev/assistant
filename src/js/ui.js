@@ -16,6 +16,7 @@ export class TranscriptUI {
         this.contentEl = null;
         this.maxChars = 1200;
         this.fontSize = 16;
+        this.showOriginal = true; // bilingual subtitle vs translation-only
         this.viewMode = 'subtitle'; // 'single' | 'dual' | 'subtitle'
 
         // Segments: each has { id, original, translation, status, speaker, language, confidence, source }
@@ -49,6 +50,10 @@ export class TranscriptUI {
      */
     configure({ maxLines, showOriginal, fontSize, fontColor, viewMode }) {
         if (maxLines !== undefined) this.maxChars = maxLines * 160;
+        if (showOriginal !== undefined) {
+            this.showOriginal = showOriginal;
+            this._render();
+        }
         if (fontSize !== undefined) {
             this.fontSize = fontSize;
             this.container.style.setProperty('--transcript-font-size', `${fontSize}px`);
@@ -573,9 +578,10 @@ export class TranscriptUI {
                 html += `<div class="subtitle-speaker">Speaker ${this._esc(c.speaker)}:</div>`;
                 lastRenderedSpeaker = c.speaker;
             }
-            html += `<div class="subtitle-pair">
-                <div class="subtitle-top"><span class="subtitle-prefix">EN:</span> ${this._esc(c.en)}</div>
-                <div class="subtitle-bottom"><span class="subtitle-prefix">VI:</span> ${this._esc(c.vi)}</div>
+            const top = this.showOriginal && c.en
+                ? `<div class="subtitle-top">${this._esc(c.en)}</div>` : '';
+            html += `<div class="subtitle-pair">${top}
+                <div class="subtitle-bottom">${this._esc(c.vi)}</div>
             </div>`;
         }
 
@@ -584,9 +590,10 @@ export class TranscriptUI {
                 html += `<div class="subtitle-speaker">Speaker ${this._esc(pendingSpeaker)}:</div>`;
                 lastRenderedSpeaker = pendingSpeaker;
             }
-            html += `<div class="subtitle-pair pending">
-                <div class="subtitle-top"><span class="subtitle-prefix">EN:</span> ${this._esc(pendingEn)}</div>
-                <div class="subtitle-bottom"><span class="subtitle-prefix">VI:</span> …</div>
+            const top = this.showOriginal
+                ? `<div class="subtitle-top">${this._esc(pendingEn)}</div>` : '';
+            html += `<div class="subtitle-pair pending">${top}
+                <div class="subtitle-bottom">…</div>
             </div>`;
         }
 
