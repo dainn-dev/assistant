@@ -55,6 +55,10 @@ export const conversationMethods = {
                 const text = await invoke('read_transcript', { filename });
                 segments = this._parseSavedTranscriptToSegments(text);
             }
+            this._reviewTranscriptKb = Math.ceil(
+                segments.reduce((n, s) => n + (s.original || '').length, 0) / 1024
+            );
+            this._reviewLoadCached?.(filename);
             this.transcriptUI.configure({ viewMode: 'subtitle' });
             this.transcriptUI.clear();
             this.transcriptUI.loadSegments(segments, { replaceSessionLog: false });
@@ -174,8 +178,11 @@ export const conversationMethods = {
                 const li = document.createElement('li');
                 li.className = 'conversation-item';
                 li.dataset.filename = s.filename;
+                const badge = s.has_review
+                    ? '<span class="conversation-badge" title="Reviewed">★</span>'
+                    : '';
                 li.innerHTML = `
-                    <span class="conversation-label">🗨 ${meta.date} ${meta.time}</span>
+                    <span class="conversation-label">🗨 ${meta.date} ${meta.time}${badge}</span>
                     <button type="button" class="btn-remove-conversation" title="Delete conversation" aria-label="Delete conversation">×</button>
                 `;
 

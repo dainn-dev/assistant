@@ -736,6 +736,9 @@ export const sessionMethods = {
         this._sonioxSec = { system: 0, mic: 0 };
         this._llmCalls = 0;
         this._clearError?.();
+        this._review = null;
+        this._reviewTranscriptKb = 0;
+        this._reviewHide?.();
         if (this._chipTimer) {
             clearInterval(this._chipTimer);
             this._chipTimer = null;

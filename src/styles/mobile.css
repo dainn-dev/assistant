@@ -101,10 +101,23 @@ body.mobile #chat-panel {
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
 
-/* Hide desktop right panel/resizer on mobile */
+/* Hide desktop right panel/resizer on mobile — except when it hosts the
+   full-screen review overlay */
 body.mobile #right-panel,
 body.mobile #right-panel-resizer {
   display: none !important;
+}
+
+body.mobile #right-panel:has(#review-panel:not([hidden])) {
+  display: block !important;
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  width: auto;
+  max-width: none;
+  background: rgba(10, 10, 14, 0.98);
+  overflow-y: auto;
+  padding: 14px;
 }
 
 /* Interview suggestions as bottom sheet */

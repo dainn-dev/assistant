@@ -157,6 +157,7 @@
     <!-- Read-only banner: shown when replaying a saved conversation -->
     <div id="readonly-banner" style="display:none">
       <span>Viewing a saved conversation</span>
+      <button id="btn-review-session" type="button">Review interview</button>
       <button id="btn-back-to-live" type="button">Back to live</button>
     </div>
 
@@ -187,7 +188,26 @@
       <div id="right-panel-resizer" class="right-panel-resizer" style="display:none"></div>
 
       <!-- Right panel (used for Interview suggestions when docked) -->
-      <div id="right-panel" class="right-panel" style="display:none" aria-label="Right panel"></div>
+      <div id="right-panel" class="right-panel" style="display:none" aria-label="Right panel">
+        <!-- Post-session review, docked in read-only mode -->
+        <section id="review-panel" class="review-panel" hidden>
+          <div class="review-head">
+            <span>Interview review</span>
+            <div class="review-actions">
+              <button type="button" id="btn-review-copy" class="icon-btn small" title="Copy review">⧉</button>
+              <button type="button" id="btn-review-regenerate" class="icon-btn small" title="Regenerate review">↻</button>
+              <button type="button" id="btn-review-close" class="icon-btn small" title="Close review">×</button>
+            </div>
+          </div>
+          <div id="review-status" class="review-status"></div>
+          <div id="review-overall" class="review-overall"></div>
+          <ul id="review-questions" class="review-questions"></ul>
+          <div id="review-practice-wrap" hidden>
+            <div class="review-practice-title">Practice these</div>
+            <ol id="review-practice" class="review-practice"></ol>
+          </div>
+        </section>
+      </div>
     </div>
 
     <!-- Display controls: text size & color, toggled by the Aa button -->
