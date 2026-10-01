@@ -2456,6 +2456,30 @@ input[type="range"]::-webkit-slider-thumb:hover {
 }
 
 /* Hint text */
+.error-pill {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(255, 180, 60, 0.55);
+  border-radius: 10px;
+  background: rgba(255, 180, 60, 0.14);
+  color: #ffb43c;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  animation: error-pill-pulse 2s ease-in-out infinite;
+}
+
+.error-pill:hover {
+  background: rgba(255, 180, 60, 0.3);
+}
+
+@keyframes error-pill-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* Early-suggestion stats readout (Settings → AI) */
 .early-stats {
   margin-top: 8px;

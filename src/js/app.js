@@ -25,6 +25,7 @@ import { updaterMethods } from './updater-ui.js';
 import { shortcutMethods } from './shortcuts.js';
 import { interviewPanelMethods } from './interview-panel.js';
 import { earlySuggestionMethods } from './early-suggestions.js';
+import { toastMethods } from './toast.js';
 
 class App {
     constructor() {
@@ -613,28 +614,7 @@ class App {
         });
     }
 
-    _showToast(message, type = 'success') {
-        // Remove existing toast
-        const existing = document.querySelector('.toast');
-        if (existing) existing.remove();
 
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.textContent = message;
-        document.body.appendChild(toast);
-
-        // Trigger animation
-        requestAnimationFrame(() => {
-            toast.classList.add('show');
-        });
-
-        // Auto-remove (longer for errors)
-        const duration = type === 'error' ? 5000 : 3000;
-        setTimeout(() => {
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 300);
-        }, duration);
-    }
 
     _insertIntoTextarea(textarea, insertText) {
         const start = textarea.selectionStart ?? textarea.value.length;
@@ -650,7 +630,7 @@ class App {
 }
 
 // Methods split into sibling modules are merged onto the prototype here.
-Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods);
+Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods, toastMethods);
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {

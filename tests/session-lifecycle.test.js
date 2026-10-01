@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { sessionMethods } from '../src/js/session.js';
+import { toastMethods } from '../src/js/toast.js';
 import { TranscriptUI } from '../src/js/ui.js';
 import { settingsManager } from '../src/js/settings.js';
 import { sonioxClient, sonioxMicClient } from '../src/js/soniox.js';
@@ -199,5 +200,46 @@ describe('session lifecycle', () => {
         expect(invokeCalls.map(c => c.cmd)).not.toContain('start_capture');
         expect(app.isRunning).toBe(true);
         vi.restoreAllMocks();
+    });
+});
+
+describe('persistent error pill', () => {
+    let pill;
+    function makeToastHost() {
+        pill = stubEl();
+        pill._bound = false;
+        let clickHandler = null;
+        pill.addEventListener = (ev, fn) => { if (ev === 'click') clickHandler = fn; };
+        pill._click = () => clickHandler?.();
+        document.getElementById = (id) => (id === 'error-pill' ? pill : stubEl());
+        document.querySelector = () => null;
+        document.body = { appendChild() {}, classList: { add() {}, remove() {}, toggle() {} } };
+        globalThis.requestAnimationFrame = (fn) => fn();
+        return Object.assign({}, toastMethods, { _lastError: null });
+    }
+
+    test('error toast records _lastError and shows the pill; success does not', () => {
+        const app = makeToastHost();
+        app._showToast('LLM 401', 'error');
+        expect(app._lastError.message).toBe('LLM 401');
+        expect(pill.style.display).toBe('');
+        app._showToast('ok', 'success');
+        expect(app._lastError.message).toBe('LLM 401'); // unchanged
+    });
+
+    test('pill click dismisses without re-recording the error', () => {
+        const app = makeToastHost();
+        app._showToast('Mic lost', 'error');
+        pill._click();
+        expect(app._lastError).toBeNull();
+        expect(pill.style.display).toBe('none');
+    });
+
+    test('new session clears a stale error', () => {
+        const app = makeToastHost();
+        app._showToast('boom', 'error');
+        app._clearError();
+        expect(app._lastError).toBeNull();
+        expect(pill.style.display).toBe('none');
     });
 });

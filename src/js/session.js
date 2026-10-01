@@ -228,6 +228,7 @@ export const sessionMethods = {
 
         this.isRunning = true;
         this.sessionActive = true;
+        this._clearError?.();
         this._updateStartButton();
         this._updateControlsForMode();
         this._updateSessionChip();
@@ -734,6 +735,7 @@ export const sessionMethods = {
         this._earlyTokenSeen?.clear();
         this._sonioxSec = { system: 0, mic: 0 };
         this._llmCalls = 0;
+        this._clearError?.();
         if (this._chipTimer) {
             clearInterval(this._chipTimer);
             this._chipTimer = null;
