@@ -315,19 +315,20 @@ class App {
             this._scheduleSuggestions({ transcriptContext, userDraft });
         });
 
-        // Open suggestions panel (after closing)
+        // Edge toggle: open/close the suggestions panel (same spot both ways)
         document.getElementById('btn-open-suggestions')?.addEventListener('click', () => {
             if (!this._isSuggestionsMode()) return;
-            this._interviewSuggestionsClosed = false;
             if (this.isMobile) {
+                this._interviewSuggestionsClosed = false;
                 this._setMobileSheetOpen(true);
-            } else {
-                this._setRightPanelCollapsed(false);
+                return;
             }
-            if (this._interviewSuggestionsItems.length) return;
-            const { transcriptContext, userDraft } = this._lastInterviewSuggestArgs || {};
-            // Manual mode: do not auto-generate on open
-            //this._setInterviewSuggestionsStatus('Ready — click ⟳ to generate');
+            const closing = !this._rightPanelCollapsed;
+            this._interviewSuggestionsClosed = closing;
+            const panel = document.getElementById('interview-suggestions-panel');
+            if (panel) panel.style.display = '';
+            this._setRightPanelCollapsed(closing);
+            // Manual mode: do not auto-generate on reopen
         });
 
         // Start/Stop button

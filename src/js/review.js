@@ -112,6 +112,8 @@ export const reviewMethods = {
         const contentArea = document.getElementById('content-area');
         if (this._suggestionsDock?.docked && suggestions) {
             suggestions.style.display = '';
+            // Restore the edge toggle for the docked suggestions panel.
+            this._setRightPanelCollapsed?.(this._rightPanelCollapsed);
         } else {
             if (right) right.style.display = 'none';
             contentArea?.classList.remove('split-suggestions');

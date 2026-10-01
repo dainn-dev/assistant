@@ -543,7 +543,8 @@ body.controls-hidden #drag-region {
   max-width: 50%;
   min-height: 0;
   border-left: 1px solid var(--border-subtle);
-  background: rgba(20, 20, 30, 0.22);
+  background: rgba(14, 14, 22, 0.88);
+  backdrop-filter: blur(10px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -578,6 +579,11 @@ body.controls-hidden #drag-region {
 .suggestions-restore:hover {
   opacity: 1;
   color: rgba(255, 255, 255, 0.9);
+}
+
+/* Same spot, flipped icon: ‹ opens (panel hidden) / › closes (panel open) */
+.suggestions-restore.expanded svg {
+  transform: rotate(180deg);
 }
 
 /* When suggestions are docked to the right panel */

@@ -151,6 +151,8 @@ export const interviewPanelMethods = {
         contentArea.classList.add('split-suggestions');
         panel.classList.add('docked-right');
         this._suggestionsDock.docked = true;
+        // Re-sync the edge toggle (icon, label, visibility) for the new dock.
+        this._setRightPanelCollapsed(this._rightPanelCollapsed);
     }
 ,
 
@@ -158,13 +160,17 @@ export const interviewPanelMethods = {
     _setRightPanelCollapsed(collapsed) {
         const contentArea = document.getElementById('content-area');
         const btnOpen = document.getElementById('btn-open-suggestions');
-        const btnClose = document.getElementById('btn-close-suggestions');
-        if (!contentArea || !btnOpen || !btnClose) return;
+        if (!contentArea || !btnOpen) return;
         this._rightPanelCollapsed = !!collapsed;
         contentArea.classList.toggle('right-panel-collapsed', this._rightPanelCollapsed);
-        btnOpen.style.display = this._rightPanelCollapsed ? '' : 'none';
+        // Edge toggle stays at the same spot in both states — icon flips.
+        const docked = !!this._suggestionsDock?.docked;
+        btnOpen.style.display = docked ? '' : 'none';
+        btnOpen.classList.toggle('expanded', docked && !this._rightPanelCollapsed);
+        const label = this._rightPanelCollapsed ? 'Show suggestions' : 'Hide suggestions';
+        btnOpen.title = label;
+        btnOpen.setAttribute('aria-label', label);
         btnOpen.setAttribute('aria-expanded', String(!this._rightPanelCollapsed));
-        btnClose.style.display = this._rightPanelCollapsed ? 'none' : '';
     }
 ,
 
