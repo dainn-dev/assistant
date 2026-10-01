@@ -69,4 +69,17 @@ describe('update check surfacing', () => {
         expect(a._showToast).not.toHaveBeenCalled();
         vi.useRealTimers();
     });
+
+    it('a failed check does not get overwritten with "up to date"', () => {
+        vi.useFakeTimers();
+        const a = app();
+        a._checkForUpdates();
+        vi.runAllTimers();
+        // Plugin fires onError then onCheckComplete — error must survive
+        updater.onError(new Error('Could not fetch a valid release JSON from the remote'));
+        updater.onCheckComplete(false);
+        expect(document.getElementById('update-status-text').textContent)
+            .toContain('No release published yet');
+        vi.useRealTimers();
+    });
 });

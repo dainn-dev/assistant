@@ -11,13 +11,20 @@ export const updaterMethods = {
             this._onUpdateAvailable(version, notes);
         };
         updater.onError = (err) => {
+            this._updateCheckFailed = true;
+            const raw = String(err?.message || err);
+            // A 404/invalid-JSON from the release endpoint means no release
+            // exists yet — that's an expected state, not a broken check.
+            const friendly = /valid release json|404|not found/i.test(raw)
+                ? 'No release published yet'
+                : `Check failed: ${raw}`;
             const statusText = document.getElementById('update-status-text');
-            if (statusText) statusText.textContent = `⚠️ Check failed: ${err.message || err}`;
+            if (statusText) statusText.textContent = `⚠️ ${friendly}`;
             // Startup checks fail silently (offline, no release yet) — only a
             // manual click surfaces the persistent error pill.
             if (this._manualUpdateCheck) {
                 this._manualUpdateCheck = false;
-                this._showToast?.(`Update check failed: ${err.message || err}`, 'error');
+                this._showToast?.(friendly, 'error');
             }
         };
         updater.onCheckComplete = (hasUpdate) => {
@@ -25,10 +32,16 @@ export const updaterMethods = {
             const checkBtn = document.getElementById('btn-check-update');
             if (checkBtn) checkBtn.classList.remove('spinning');
             if (!hasUpdate && !this._pendingUpdateVersion) {
+                if (this._updateCheckFailed) {
+                    // Keep the error message — don't overwrite with "up to date".
+                    this._updateCheckFailed = false;
+                    return;
+                }
                 const statusText = document.getElementById('update-status-text');
                 if (statusText) statusText.textContent = '✅ App is up to date';
             }
         };
+        this._updateCheckFailed = false;
         // Delay check slightly so app finishes loading first
         setTimeout(() => {
             const statusText = document.getElementById('update-status-text');
