@@ -254,6 +254,14 @@ class App {
             await this.appWindow.minimize();
         });
 
+        // Maximize/restore button — icon flips to match window state
+        const btnMaximize = document.getElementById('btn-maximize');
+        btnMaximize?.addEventListener('click', async () => {
+            await this.appWindow.toggleMaximize();
+            this._syncMaximizeIcon();
+        });
+        this.appWindow.onResized(() => this._syncMaximizeIcon());
+
         // Pin/Unpin button
         document.getElementById('btn-pin').addEventListener('click', () => {
             this._togglePin();

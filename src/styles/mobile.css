@@ -39,6 +39,7 @@ body.mobile {
 /* Window chrome makes no sense on mobile — reclaim the bar space */
 body.mobile #btn-pin,
 body.mobile #btn-minimize,
+body.mobile #btn-maximize,
 body.mobile #btn-close,
 body.mobile #btn-hide-controls {
   display: none;

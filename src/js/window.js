@@ -55,6 +55,24 @@ export const windowMethods = {
 ,
 
 
+    // ─── Maximize / Restore ──────────────────────────────
+
+    async _syncMaximizeIcon() {
+        const btn = document.getElementById('btn-maximize');
+        if (!btn) return;
+        const maximized = await this.appWindow.isMaximized();
+        const svg = btn.querySelector('svg');
+        if (svg) {
+            svg.innerHTML = maximized
+                ? '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10"/>'
+                : '<rect x="4" y="4" width="16" height="16" rx="2"/>';
+        }
+        btn.classList.toggle('active', maximized);
+        btn.title = maximized ? 'Restore' : 'Maximize';
+    }
+,
+
+
     // ─── Pin / Unpin (Always on Top) ────────────────────
 
     async _togglePin() {
