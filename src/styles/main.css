@@ -671,34 +671,38 @@ body.controls-hidden #drag-region {
   display: none;
 }
 
-/* Read-only banner — visible while replaying a saved conversation */
-#readonly-banner {
-  flex-shrink: 0;
+/* Per-item review trigger in the conversation list (any session type) */
+.btn-review-conversation {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 12px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: rgba(99, 140, 255, 0.10);
-  border-bottom: 1px solid rgba(99, 140, 255, 0.18);
-}
-
-#readonly-banner button {
-  padding: 2px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent-hover);
-  background: rgba(99, 140, 255, 0.15);
-  border: 1px solid rgba(99, 140, 255, 0.30);
-  border-radius: 6px;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(250, 204, 21, 0.75);
+  font-size: 12px;
   cursor: pointer;
-  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
-#readonly-banner button:hover {
-  background: rgba(99, 140, 255, 0.28);
+.conversation-item:hover .btn-review-conversation {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.btn-review-conversation:hover {
+  background: rgba(250, 204, 21, 0.14);
+  color: rgba(250, 204, 21, 1);
+}
+
+.btn-review-conversation:active {
+  transform: scale(0.92);
 }
 
 /* Display controls — transcript font size & color, toggled via Aa button */

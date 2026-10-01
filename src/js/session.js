@@ -181,11 +181,6 @@ export const sessionMethods = {
     // ─── Start/Stop ────────────────────────────────────────
 
     async start() {
-        if (this.readOnlyMode) {
-            this._showToast('Viewing a saved conversation — press + New to go live first', 'error');
-            return;
-        }
-
         const settings = settingsManager.get();
         this.translationMode = settings.translation_mode || 'soniox';
         // Never log the settings object — it contains API keys.
@@ -230,7 +225,6 @@ export const sessionMethods = {
         this.sessionActive = true;
         this._clearError?.();
         this._updateStartButton();
-        this._updateControlsForMode();
         this._updateSessionChip();
         if (!this.recordingStartTime) this.recordingStartTime = Date.now();
 
@@ -664,7 +658,6 @@ export const sessionMethods = {
         if (!this.isRunning) return;
         this.isRunning = false;
         this._updateStartButton();
-        this._updateControlsForMode();
         // Invalidate any in-flight early-suggestion stream, but keep the
         // visible card — stopping is a pause, not a discard.
         this._earlyStopTicker?.();
@@ -719,10 +712,7 @@ export const sessionMethods = {
 
 
     _createNewSession() {
-        this.readOnlyMode = false;
         this._earlyBumpEpoch?.();
-        const banner = document.getElementById('readonly-banner');
-        if (banner) banner.style.display = 'none';
         this.activeConversationFilename = null;
         this.sessionActive = true;
         this.sessionStartTime = null;
@@ -743,7 +733,6 @@ export const sessionMethods = {
             clearInterval(this._chipTimer);
             this._chipTimer = null;
         }
-        this._updateControlsForMode();
         this._updateSessionChip();
 
         this.transcriptUI.clear();
@@ -756,36 +745,7 @@ export const sessionMethods = {
 ,
 
 
-    /// Leave read-only history view and keep recording into the same file.
-    /// The loaded segments become the live sessionLog, so the next save
-    /// rewrites the same transcript with the full timeline (old + new).
-    _resumeSession() {
-        if (!this.readOnlyMode) return;
-        this.readOnlyMode = false;
-        this._earlyBumpEpoch?.();
-        const banner = document.getElementById('readonly-banner');
-        if (banner) banner.style.display = 'none';
-
-        if (this.transcriptUI?.segments?.length) {
-            this.transcriptUI.sessionLog = this.transcriptUI.segments.map(s => ({ ...s }));
-        }
-        // Save targets the viewed file — save_transcript overwrites it.
-        this._sessionFilename = this.activeConversationFilename;
-        this._savedSessionJson = JSON.stringify(this.transcriptUI?.sessionLog || []);
-        this.sessionActive = true;
-        this._review = null;
-        this._reviewHide?.();
-        this._earlyMetrics = new SessionMetrics();
-        this._sonioxSec = { system: 0, mic: 0 };
-        this._llmCalls = 0;
-        this._updateControlsForMode();
-        this._updateSessionChip();
-        this.start();
-    }
-,
-
-
-    /// Shared "+ New / Back to live" flow: stop if recording, save-first
+    /// Shared "+ New" flow: stop if recording, save-first
     /// (never silently discard), then reset into a fresh session.
     async _startNewSessionFlow() {
         if (this.isRunning || this.isStarting) {
@@ -825,9 +785,7 @@ export const sessionMethods = {
             this._chipTimer = null;
         }
 
-        if (this.readOnlyMode) {
-            chip.style.display = 'none';
-        } else if (this.isRunning) {
+        if (this.isRunning) {
             const secs = Math.max(0, Math.floor((Date.now() - (this.recordingStartTime || Date.now())) / 1000));
             chip.style.display = '';
             chip.className = 'session-chip recording';
@@ -872,28 +830,6 @@ export const sessionMethods = {
         btn.classList.toggle('recording', this.isRunning);
         iconPlay.style.display = this.isRunning ? 'none' : 'block';
         iconStop.style.display = this.isRunning ? 'block' : 'none';
-    }
-,
-
-
-    _updateEndButtonVisibility() {
-        this._updateControlsForMode();
-    }
-,
-
-
-    _updateControlsForMode() {
-        const btnStart = document.getElementById('btn-start');
-        if (this.readOnlyMode) {
-            btnStart.disabled = true;
-            btnStart.style.opacity = '0.35';
-            btnStart.style.pointerEvents = 'none';
-        } else {
-            btnStart.disabled = false;
-            btnStart.style.opacity = '';
-            btnStart.style.pointerEvents = '';
-        }
-        // (No separate End Session button — + New finalizes the session.)
     }
 ,
 

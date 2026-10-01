@@ -22,21 +22,19 @@ export const conversationMethods = {
 
     // ─── Session History ───────────────────────────────────
 
-    async _openConversationReadOnly(filename) {
+    /// Load a saved conversation as a resumable session — the transcript
+    /// becomes the live sessionLog and pressing ▶ keeps recording into the
+    /// same file. Save-first protects any unsaved draft already in memory.
+    async _openConversation(filename) {
         // Opening history while recording would let live segments keep
-        // streaming into the read-only view — block instead of corrupting both.
+        // streaming into the loaded view — block instead of corrupting both.
         if (this.isRunning || this.isStarting) {
             this._showToast('Stop the current session to view history', 'error');
             return;
         }
+        if (!(await this._finalizeSession())) return;
 
-        this.readOnlyMode = true;
         this._earlyBumpEpoch?.();
-        const banner = document.getElementById('readonly-banner');
-        if (banner) banner.style.display = 'flex';
-        this._updateControlsForMode();
-        this._updateSessionChip();
-
         document.querySelectorAll('#conversation-list .conversation-item').forEach(el => {
             el.classList.toggle('active', el.dataset.filename === filename);
         });
@@ -61,7 +59,14 @@ export const conversationMethods = {
             this._reviewLoadCached?.(filename);
             this.transcriptUI.configure({ viewMode: 'subtitle' });
             this.transcriptUI.clear();
-            this.transcriptUI.loadSegments(segments, { replaceSessionLog: false });
+            // Adopt loaded segments as the sessionLog — resumable, and the
+            // next save overwrites the same file with the full timeline.
+            this.transcriptUI.loadSegments(segments, { replaceSessionLog: true });
+            this._sessionFilename = filename;
+            this._savedSessionJson = JSON.stringify(this.transcriptUI.sessionLog);
+            this._lastSavedAt = Date.now();
+            this.sessionActive = true;
+            this._updateSessionChip();
 
             if (!segments.length && contentEl) {
                 contentEl.textContent = 'No transcript content.';
@@ -183,8 +188,16 @@ export const conversationMethods = {
                     : '';
                 li.innerHTML = `
                     <span class="conversation-label">🗨 ${meta.date} ${meta.time}${badge}</span>
+                    <button type="button" class="btn-review-conversation" title="Review this session with the LLM" aria-label="Review session">✦</button>
                     <button type="button" class="btn-remove-conversation" title="Delete conversation" aria-label="Delete conversation">×</button>
                 `;
+
+                const reviewBtn = li.querySelector('.btn-review-conversation');
+                reviewBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    await this._openConversation(s.filename);
+                    this._reviewGenerate?.(s.filename, false);
+                });
 
                 const removeBtn = li.querySelector('.btn-remove-conversation');
                 removeBtn.addEventListener('click', async (e) => {
@@ -194,8 +207,9 @@ export const conversationMethods = {
                     if (!ok) return;
                     try {
                         await invoke('delete_transcript', { filename });
-                        // If currently viewing this conversation in read-only, exit to a safe state
-                        if (this.readOnlyMode && this.activeConversationFilename === filename) {
+                        // Deleting the currently open file: drop into a fresh
+                        // session so the next save doesn't recreate it.
+                        if (this._sessionFilename === filename || this.activeConversationFilename === filename) {
                             this._createNewSession();
                             this.activeConversationFilename = null;
                         }
@@ -206,7 +220,7 @@ export const conversationMethods = {
                     }
                 });
                 li.addEventListener('click', () => {
-                    this._openConversationReadOnly(s.filename);
+                    this._openConversation(s.filename);
                 });
                 listEl.appendChild(li);
             });

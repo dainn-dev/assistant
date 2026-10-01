@@ -48,7 +48,6 @@ class App {
         this.isPinned = true;     // Always-on-top state
         this.sidebarOpen = false; // Sidebar toggle state (always starts closed)
         this.sessionActive = false;    // true once a session has been started via start() or +New
-        this.readOnlyMode = false;     // true when viewing a past conversation
         this.activeConversationFilename = null;
         this._chipTimer = null;        // 1s interval driving the REC timer chip
         this._lastSavedAt = null;      // set when a session save succeeds
@@ -203,16 +202,6 @@ class App {
         // Quick "+" in the control bar — same new-session flow, no sidebar needed
         document.getElementById('btn-quick-new')?.addEventListener('click', () => {
             this._startNewSessionFlow();
-        });
-
-        // Read-only banner: return from history view to the live session
-        document.getElementById('btn-back-to-live')?.addEventListener('click', () => {
-            this._startNewSessionFlow();
-        });
-
-        // Read-only banner: keep recording into the viewed transcript
-        document.getElementById('btn-continue-session')?.addEventListener('click', () => {
-            this._resumeSession();
         });
 
         // Aa button: toggle the transcript text-size/color controls

@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { sessionMethods } from '../src/js/session.js';
+import { conversationMethods } from '../src/js/conversations.js';
 import { toastMethods } from '../src/js/toast.js';
 import { TranscriptUI } from '../src/js/ui.js';
 import { settingsManager } from '../src/js/settings.js';
@@ -76,11 +77,11 @@ function makeContainer() {
 
 function makeApp() {
     const toasts = [];
-    const app = Object.assign({}, sessionMethods, {
+    const app = Object.assign({}, sessionMethods, conversationMethods, {
         isRunning: false,
         isStarting: false,
-        readOnlyMode: false,
         sessionActive: false,
+        activeConversationFilename: null,
         currentSource: 'system',
         currentTemplate: null,
         translationMode: 'soniox',
@@ -176,55 +177,61 @@ describe('session lifecycle', () => {
         expect(app._toasts.some(t => t.t === 'error')).toBe(true);
     });
 
-    test('start() refuses in read-only mode without touching capture', async () => {
+    test('opening a saved conversation makes it resumable — ▶ records into the same file', async () => {
         const app = makeApp();
-        app.readOnlyMode = true;
+        invokeImpl = async (cmd) => {
+            if (cmd === 'read_transcript_segments') {
+                return { version: 2, segments: [{ id: 1, original: 'old q', translation: 'câu cũ', status: 'translated' }] };
+            }
+            if (cmd === 'check_permissions') return { screen_recording: 'granted', microphone: 'granted' };
+            return null;
+        };
+        vi.spyOn(sonioxClient, 'connect').mockImplementation(() => {});
 
-        await app.start();
+        await app._openConversation('2026-10-01_10-00-00.md');
 
-        expect(app.isRunning).toBe(false);
-        expect(invokeCalls.some(c => c.cmd === 'start_capture' || c.cmd === 'start_split_capture')).toBe(false);
-        expect(app._toasts.some(t => t.t === 'error')).toBe(true);
-    });
-
-    test('continue recording adopts the viewed transcript and resumes', async () => {
-        const app = makeApp();
-        // Simulate the read-only state: segments in the display buffer, an
-        // untouched live sessionLog, and a filename to write back to.
-        app.readOnlyMode = true;
-        app.activeConversationFilename = '2026-10-01_10-00-00.md';
-        app.transcriptUI.segments = [
-            { id: 1, original: 'old q', translation: 'câu cũ', status: 'translated' },
-        ];
-        app.transcriptUI.sessionLog = [];
-        app.start = vi.fn();
-
-        app._resumeSession();
-
-        expect(app.readOnlyMode).toBe(false);
         expect(app._sessionFilename).toBe('2026-10-01_10-00-00.md');
         expect(app.transcriptUI.sessionLog.length).toBe(1);
-        expect(app.start).toHaveBeenCalled();
-        // Freshly adopted content is clean — no spurious save until new audio lands
-        expect(app._isSessionDirty()).toBe(false);
+        expect(app._isSessionDirty()).toBe(false); // already persisted
+
+        await app.start();
+        expect(app.isRunning).toBe(true);
+        vi.restoreAllMocks();
     });
 
-    test('resumed session saves old + new segments to the same file', async () => {
+    test('dirty draft is saved before a saved conversation loads', async () => {
         const app = makeApp();
-        app.readOnlyMode = true;
-        app.activeConversationFilename = '2026-10-01_10-00-00.md';
-        app.transcriptUI.segments = [
-            { id: 1, original: 'old q', translation: 'câu cũ', status: 'translated' },
-        ];
-        app.transcriptUI.sessionLog = [];
-        app.start = vi.fn();
-        app._resumeSession();
+        app.sessionActive = true;
+        app.recordingStartTime = Date.now() - 10_000;
+        app.transcriptUI.addOriginal('unsaved draft', 'S1', 'en', 'system');
+        invokeImpl = async (cmd) => {
+            if (cmd === 'save_transcript') return '/tmp/draft.md';
+            if (cmd === 'read_transcript_segments') {
+                return [{ id: 1, original: 'loaded q', translation: 'câu đã lưu', status: 'translated' }];
+            }
+            return null;
+        };
 
-        // A new segment lands after resuming
+        await app._openConversation('2026-10-01_11-00-00.md');
+
+        // The live draft was finalized first, then replaced by the loaded file
+        expect(invokeCalls.some(c => c.cmd === 'save_transcript')).toBe(true);
+        expect(app._sessionFilename).toBe('2026-10-01_11-00-00.md');
+        expect(app.transcriptUI.sessionLog.map(s => s.original)).toEqual(['loaded q']);
+    });
+
+    test('new segments after opening append and save back to the same file', async () => {
+        const app = makeApp();
+        invokeImpl = async (cmd) => {
+            if (cmd === 'read_transcript_segments') {
+                return [{ id: 1, original: 'old q', translation: 'câu cũ', status: 'translated' }];
+            }
+            if (cmd === 'save_transcript') return '/tmp/2026-10-01_10-00-00.md';
+            return null;
+        };
+        await app._openConversation('2026-10-01_10-00-00.md');
+
         app.transcriptUI.addOriginal('new q', 'S1', 'en', 'system');
-        invokeImpl = async (cmd) => (cmd === 'save_transcript'
-            ? '/tmp/2026-10-01_10-00-00.md' : null);
-
         const ok = await app._finalizeSession();
 
         expect(ok).toBe(true);

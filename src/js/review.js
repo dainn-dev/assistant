@@ -15,12 +15,6 @@ export const reviewMethods = {
     _reviewInit() {
         if (this._reviewInited) return;
         this._reviewInited = true;
-        document.getElementById('btn-review-session')
-            ?.addEventListener('click', () => {
-                if (this.activeConversationFilename) {
-                    this._reviewGenerate(this.activeConversationFilename, false);
-                }
-            });
         document.getElementById('btn-review-regenerate')
             ?.addEventListener('click', () => {
                 if (this.activeConversationFilename) {
@@ -42,6 +36,7 @@ export const reviewMethods = {
             const cached = await invoke('read_session_review', { filename });
             if (cached) {
                 this._review = cached;
+                this._reviewFilename = filename;
                 this._reviewRender(cached);
                 this._reviewShow();
             } else {
@@ -57,7 +52,7 @@ export const reviewMethods = {
 
     async _reviewGenerate(filename, force) {
         if (!filename) return;
-        if (this._review && !force) {
+        if (this._review && this._reviewFilename === filename && !force) {
             this._reviewShow();
             return;
         }
@@ -70,6 +65,7 @@ export const reviewMethods = {
         try {
             const review = await invoke('review_session', { filename, force });
             this._review = review;
+            this._reviewFilename = filename;
             this._reviewRender(review);
             this._reviewShow();
             this._loadConversationList?.(); // refresh ★ badge
