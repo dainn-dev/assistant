@@ -187,6 +187,52 @@ describe('session lifecycle', () => {
         expect(app._toasts.some(t => t.t === 'error')).toBe(true);
     });
 
+    test('continue recording adopts the viewed transcript and resumes', async () => {
+        const app = makeApp();
+        // Simulate the read-only state: segments in the display buffer, an
+        // untouched live sessionLog, and a filename to write back to.
+        app.readOnlyMode = true;
+        app.activeConversationFilename = '2026-10-01_10-00-00.md';
+        app.transcriptUI.segments = [
+            { id: 1, original: 'old q', translation: 'câu cũ', status: 'translated' },
+        ];
+        app.transcriptUI.sessionLog = [];
+        app.start = vi.fn();
+
+        app._resumeSession();
+
+        expect(app.readOnlyMode).toBe(false);
+        expect(app._sessionFilename).toBe('2026-10-01_10-00-00.md');
+        expect(app.transcriptUI.sessionLog.length).toBe(1);
+        expect(app.start).toHaveBeenCalled();
+        // Freshly adopted content is clean — no spurious save until new audio lands
+        expect(app._isSessionDirty()).toBe(false);
+    });
+
+    test('resumed session saves old + new segments to the same file', async () => {
+        const app = makeApp();
+        app.readOnlyMode = true;
+        app.activeConversationFilename = '2026-10-01_10-00-00.md';
+        app.transcriptUI.segments = [
+            { id: 1, original: 'old q', translation: 'câu cũ', status: 'translated' },
+        ];
+        app.transcriptUI.sessionLog = [];
+        app.start = vi.fn();
+        app._resumeSession();
+
+        // A new segment lands after resuming
+        app.transcriptUI.addOriginal('new q', 'S1', 'en', 'system');
+        invokeImpl = async (cmd) => (cmd === 'save_transcript'
+            ? '/tmp/2026-10-01_10-00-00.md' : null);
+
+        const ok = await app._finalizeSession();
+
+        expect(ok).toBe(true);
+        const save = invokeCalls.find(c => c.cmd === 'save_transcript');
+        expect(save.args.filename).toBe('2026-10-01_10-00-00.md'); // same file
+        expect(save.args.segments.segments.length).toBe(2);       // old + new
+    });
+
     test('Interview + both sources uses split capture', async () => {
         const app = makeApp();
         app.currentSource = 'both';

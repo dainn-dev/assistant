@@ -210,6 +210,11 @@ class App {
             this._startNewSessionFlow();
         });
 
+        // Read-only banner: keep recording into the viewed transcript
+        document.getElementById('btn-continue-session')?.addEventListener('click', () => {
+            this._resumeSession();
+        });
+
         // Aa button: toggle the transcript text-size/color controls
         document.getElementById('btn-display-controls')?.addEventListener('click', () => {
             const el = document.getElementById('display-controls');

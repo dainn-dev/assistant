@@ -756,6 +756,35 @@ export const sessionMethods = {
 ,
 
 
+    /// Leave read-only history view and keep recording into the same file.
+    /// The loaded segments become the live sessionLog, so the next save
+    /// rewrites the same transcript with the full timeline (old + new).
+    _resumeSession() {
+        if (!this.readOnlyMode) return;
+        this.readOnlyMode = false;
+        this._earlyBumpEpoch?.();
+        const banner = document.getElementById('readonly-banner');
+        if (banner) banner.style.display = 'none';
+
+        if (this.transcriptUI?.segments?.length) {
+            this.transcriptUI.sessionLog = this.transcriptUI.segments.map(s => ({ ...s }));
+        }
+        // Save targets the viewed file — save_transcript overwrites it.
+        this._sessionFilename = this.activeConversationFilename;
+        this._savedSessionJson = JSON.stringify(this.transcriptUI?.sessionLog || []);
+        this.sessionActive = true;
+        this._review = null;
+        this._reviewHide?.();
+        this._earlyMetrics = new SessionMetrics();
+        this._sonioxSec = { system: 0, mic: 0 };
+        this._llmCalls = 0;
+        this._updateControlsForMode();
+        this._updateSessionChip();
+        this.start();
+    }
+,
+
+
     /// Shared "+ New / Back to live" flow: stop if recording, save-first
     /// (never silently discard), then reset into a fresh session.
     async _startNewSessionFlow() {
