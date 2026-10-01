@@ -1,6 +1,6 @@
 [package]
 name = "myjavis"
-version = "1.0.0"
+version = "1.0.1"
 description = "Personal Real-time Speech Translator"
 authors = ["phucnt"]
 edition = "2021"
