@@ -129,6 +129,8 @@ export const settingsFormMethods = {
             return;
         }
         this._settingsSnapshot = null;
+        // Discard live-previewed display values — restore the saved settings.
+        this._applySettings?.(settingsManager.get());
         this._showView('overlay');
     }
 ,
@@ -240,6 +242,7 @@ export const settingsFormMethods = {
         document.getElementById('max-lines-value').textContent = s.max_lines || 5;
 
         document.getElementById('check-show-original').checked = s.show_original !== false;
+        document.getElementById('display-preview')?.classList.toggle('no-original', s.show_original === false);
 
         // Custom context (rich format)
         const ctx = s.custom_context;

@@ -455,13 +455,27 @@ class App {
             this._saveSettingsFromForm();
         });
 
-        // Slider live updates
+        // Slider live updates — also apply the CSS vars immediately so the
+        // preview card (and overlay behind) reflects the value while dragging.
+        // Closing settings without saving reverts via _applySettings.
         document.getElementById('range-opacity').addEventListener('input', (e) => {
-            document.getElementById('opacity-value').textContent = `${e.target.value}%`;
+            const pct = parseInt(e.target.value, 10) || 85;
+            document.getElementById('opacity-value').textContent = `${pct}%`;
+            document.documentElement.style.setProperty('--overlay-alpha', String(Math.min(1, Math.max(0, pct / 100))));
         });
 
         document.getElementById('range-font-size').addEventListener('input', (e) => {
             document.getElementById('font-size-value').textContent = `${e.target.value}px`;
+            document.documentElement.style.setProperty('--app-font-size', `${e.target.value}px`);
+        });
+
+        document.getElementById('select-font-family')?.addEventListener('change', (e) => {
+            const ff = e.target.value || 'Inter';
+            document.documentElement.style.setProperty('--app-font-family', ff);
+        });
+
+        document.getElementById('check-show-original')?.addEventListener('change', (e) => {
+            document.getElementById('display-preview')?.classList.toggle('no-original', !e.target.checked);
         });
 
         document.getElementById('range-max-lines').addEventListener('input', (e) => {

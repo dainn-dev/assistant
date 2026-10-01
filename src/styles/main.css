@@ -634,6 +634,33 @@ body.controls-hidden #drag-region {
   z-index: 20;
 }
 
+/* Live preview card in Settings → Display — mirrors the overlay's
+   background, font and size so changes are visible immediately */
+.display-preview {
+  background: var(--bg-primary);
+  backdrop-filter: blur(30px) saturate(150%);
+  -webkit-backdrop-filter: blur(30px) saturate(150%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.display-preview .preview-original {
+  font-size: calc(var(--app-font-size, 16px) * 0.85);
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 4px;
+}
+
+.display-preview .preview-translated {
+  font-size: var(--app-font-size, 16px);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.display-preview.no-original .preview-original {
+  display: none;
+}
+
 /* Read-only banner — visible while replaying a saved conversation */
 #readonly-banner {
   flex-shrink: 0;
