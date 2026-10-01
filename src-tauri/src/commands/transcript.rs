@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 /// Get the transcript directory path
-fn transcript_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn transcript_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -104,6 +104,8 @@ pub struct TranscriptEntry {
     path: String,
     created_at: String,
     size_bytes: u64,
+    /// True when a `<name>.review.json` sidecar exists (post-session review).
+    has_review: bool,
 }
 
 /// List all saved transcript sessions, newest first
@@ -142,11 +144,13 @@ pub fn list_transcripts(app: AppHandle) -> Result<Vec<TranscriptEntry>, String> 
                     base.to_string()
                 }
             };
+            let has_review = entry.path().with_extension("review.json").exists();
             Some(TranscriptEntry {
                 filename,
                 path,
                 created_at,
                 size_bytes,
+                has_review,
             })
         })
         .collect();
@@ -212,8 +216,9 @@ pub fn delete_transcript(app: AppHandle, filename: String) -> Result<(), String>
     let dir = transcript_dir(&app)?;
     let filepath = dir.join(&filename);
 
-    // Remove the segments sidecar too (best-effort)
+    // Remove the segments + review sidecars too (best-effort)
     let _ = fs::remove_file(filepath.with_extension("segments.json"));
+    let _ = fs::remove_file(filepath.with_extension("review.json"));
 
     match fs::remove_file(&filepath) {
         Ok(_) => Ok(()),

@@ -100,6 +100,8 @@ pub fn run() {
             commands::profile::save_profile_item,
             commands::profile::delete_profile_item,
             commands::profile::draft_profile_from_documents,
+            commands::review::review_session,
+            commands::review::read_session_review,
             get_platform_info,
         ])
         .run(tauri::generate_context!())
