@@ -819,8 +819,8 @@ No markdown fences, no extra text — ONLY the JSON array.",
 
     let prompt = format!(
         "You are the candidate — a senior software engineer. Speak in first person as if you are answering the interviewer directly.\n\
-Use the CV/JD snippets below to ground your answer in the candidate's real experience: specific technologies, projects, and patterns they have worked with.\n\
-Make the answer technical and concrete (mention design patterns, frameworks, real examples from the CV), not generic theory.\n\
+Use the [SUMMARY], [STORY], [STRENGTH], [CV] and [JD] excerpts below. If a [STORY] fits the question, answer with that story's Situation→Action→Result in first person. Never claim experience that is not in the excerpts.\n\
+Make the answer technical and concrete (mention design patterns, frameworks, real examples from the excerpts), not generic theory.\n\
 Keep it concise, spoken tone, under ~80 words.\n\n\
 {return_format}\n\n\
 Session summary (may be empty):\n\
@@ -893,22 +893,61 @@ pub fn select_context_excerpts(
     max_chars: usize,
 ) -> Result<Vec<ContextExcerpt>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let docs = db::get_documents(&conn, &user_id)?;
+    select_excerpts_inner(&conn, &user_id, &query, max_chars)
+}
+
+/// Excerpt selection over documents + profile items. Summary always leads when
+/// present; stories/strengths rank lexically alongside CV/JD chunks. Pure with
+/// respect to `conn` so tests can use an in-memory database.
+fn select_excerpts_inner(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+    query: &str,
+    max_chars: usize,
+) -> Result<Vec<ContextExcerpt>, String> {
+    let docs = db::get_documents(conn, user_id)?;
+    let profile = db::list_profile_items(conn, user_id)?;
     let budget = if max_chars == 0 { 3000 } else { max_chars };
 
+    let mut summary_item: Option<ContextExcerpt> = None;
     let mut scored: Vec<(usize, String, String)> = Vec::new();
     for (doc_type, text) in docs {
         for chunk in
             chunk_text_with_overlap(&text, INGEST_CHUNK_MAX_CHARS, INGEST_CHUNK_OVERLAP_CHARS)
         {
-            scored.push((score_excerpt(&query, &chunk), doc_type.clone(), chunk));
+            scored.push((score_excerpt(query, &chunk), doc_type.clone(), chunk));
+        }
+    }
+    for item in profile {
+        match item.kind.as_str() {
+            "summary" => {
+                summary_item = Some(ContextExcerpt {
+                    doc_type: "summary".into(),
+                    text: item.content,
+                });
+            }
+            "story" | "strength" => {
+                let text = if item.title.is_empty() {
+                    item.content.clone()
+                } else {
+                    format!("{}: {}", item.title, item.content)
+                };
+                let score = score_excerpt(query, &format!("{} {}", item.title, item.content));
+                scored.push((score, item.kind, text));
+            }
+            _ => {}
         }
     }
     // Highest overlap first; stable order keeps deterministic picks on ties.
     scored.sort_by_key(|a| std::cmp::Reverse(a.0));
+    let scored = dedupe_excerpts(scored);
 
     let mut out = Vec::new();
     let mut used = 0usize;
+    if let Some(s) = summary_item {
+        used += s.text.len();
+        out.push(s);
+    }
     for (score, doc_type, chunk) in scored {
         if score == 0 && !out.is_empty() {
             break; // ranked hits exhausted — no padding with irrelevant chunks
@@ -926,6 +965,24 @@ pub fn select_context_excerpts(
         }
     }
     Ok(out)
+}
+
+/// Drop chunks whose (case-insensitive) text is contained in an earlier kept
+/// chunk — a profile story that repeats a CV passage must not eat the budget.
+/// First kept wins, so higher-scored entries always survive.
+fn dedupe_excerpts(items: Vec<(usize, String, String)>) -> Vec<(usize, String, String)> {
+    let mut kept: Vec<(usize, String, String)> = Vec::new();
+    'outer: for (score, kind, text) in items {
+        let lower = text.to_lowercase();
+        for (_, _, prev) in &kept {
+            let pl = prev.to_lowercase();
+            if pl.contains(&lower) || lower.contains(&pl) {
+                continue 'outer;
+            }
+        }
+        kept.push((score, kind, text));
+    }
+    kept
 }
 
 /// Abort an in-flight suggestion stream. Unknown/stale request ids are
@@ -1027,7 +1084,7 @@ pub async fn suggest_interview_answers_stream(
         "You are coaching a candidate during a live interview. The interviewer's question may be INCOMPLETE — it is still being transcribed. Answer based only on what is clear so far.\n\
 Rules:\n\
 - Give 2-3 short talking points, each under 20 words, in language code {hint_lang}.\n\
-- Ground points in the CV/JD excerpts when relevant; never invent experience that is not there.\n\
+- Ground points in the [SUMMARY]/[STORY]/[CV]/[JD] excerpts when relevant; if a [STORY] fits, hint at its Situation→Action→Result; never invent experience that is not there.\n\
 - If the question is too vague to answer, give one line on what to listen for or clarify.\n\
 - Plain text only — one point per line starting with \"- \". No JSON, no preamble.\n\n\
 CV/JD excerpts (may be empty):\n{ctx_block}\n\n\
@@ -1186,5 +1243,92 @@ mod tests {
                 > score_excerpt("deadlock transaction retry", unrelated)
         );
         assert_eq!(score_excerpt("", relevant), 0);
+    }
+
+    fn mem_db() -> rusqlite::Connection {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&c).unwrap();
+        c
+    }
+
+    fn profile_item(id: &str, kind: &str, title: &str, content: &str) -> db::ProfileItem {
+        db::ProfileItem {
+            id: id.into(),
+            user_id: "u".into(),
+            kind: kind.into(),
+            title: title.into(),
+            content: content.into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn excerpts_put_summary_first() {
+        let c = mem_db();
+        db::upsert_profile_item(
+            &c,
+            &profile_item(
+                "sum",
+                "summary",
+                "",
+                "Senior backend engineer, Rust + Postgres",
+            ),
+        )
+        .unwrap();
+        db::upsert_document(
+            &c,
+            "d1",
+            "u",
+            "cv",
+            "cv.pdf",
+            None,
+            "built payment gateway in Go",
+        )
+        .unwrap();
+        let out = select_excerpts_inner(&c, "u", "payment gateway", 3000).unwrap();
+        assert_eq!(out[0].doc_type, "summary");
+        assert!(out.iter().any(|e| e.doc_type == "cv"));
+    }
+
+    #[test]
+    fn story_and_cv_duplicates_keep_one() {
+        let c = mem_db();
+        let dup = "Situation: prod deadlock Task: fix Action: ordered locks Result: zero retries";
+        db::upsert_profile_item(&c, &profile_item("s1", "story", "Deadlock fix", dup)).unwrap();
+        db::upsert_document(&c, "d1", "u", "cv", "cv.pdf", None, dup).unwrap();
+        let out = select_excerpts_inner(&c, "u", "deadlock locks", 3000).unwrap();
+        let matches = out
+            .iter()
+            .filter(|e| e.text.contains("ordered locks"))
+            .count();
+        assert_eq!(matches, 1, "duplicated text must appear once: {:?}", out);
+    }
+
+    #[test]
+    fn story_scored_by_title_and_content() {
+        let c = mem_db();
+        db::upsert_profile_item(
+            &c,
+            &profile_item(
+                "s1",
+                "story",
+                "Deadlock incident",
+                "Situation: db froze Task: restore",
+            ),
+        )
+        .unwrap();
+        db::upsert_document(
+            &c,
+            "d1",
+            "u",
+            "cv",
+            "cv.pdf",
+            None,
+            "wrote css for landing pages",
+        )
+        .unwrap();
+        let out = select_excerpts_inner(&c, "u", "deadlock", 3000).unwrap();
+        assert_eq!(out[0].doc_type, "story");
+        assert!(out[0].text.starts_with("Deadlock incident:"));
     }
 }
