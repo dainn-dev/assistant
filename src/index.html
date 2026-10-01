@@ -301,6 +301,7 @@
         <button class="settings-tab" data-tab="tab-display">Display</button>
         <button class="settings-tab" data-tab="tab-tts">TTS</button>
         <button class="settings-tab" data-tab="tab-interview">AI</button>
+        <button class="settings-tab" data-tab="tab-profile">Profile</button>
         <button class="settings-tab" data-tab="tab-about">About</button>
       </div>
 
@@ -666,6 +667,35 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Profile -->
+      <div class="settings-tab-content" id="tab-profile">
+        <div class="settings-section ai-section">
+          <div class="ai-section-header">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
+            <span>Candidate Profile</span>
+          </div>
+          <p class="hint">Grounds every Interview suggestion. Draft it from your uploaded CV, or write your own.</p>
+          <div class="ai-field">
+            <label>Summary</label>
+            <textarea id="profile-summary" rows="3" placeholder="Senior backend engineer — Rust, Postgres, payments…"></textarea>
+          </div>
+          <div class="ai-field">
+            <div class="profile-toolbar">
+              <button id="btn-profile-add-story" class="secondary-btn profile-btn">+ Story</button>
+              <button id="btn-profile-add-strength" class="secondary-btn profile-btn">+ Strength</button>
+              <button id="btn-profile-draft" class="secondary-btn profile-btn">Draft from CV</button>
+            </div>
+            <div id="profile-draft-bar" class="profile-draft-bar" hidden>
+              <span id="profile-draft-count"></span>
+              <button id="btn-profile-accept" class="primary-btn profile-btn">Accept</button>
+              <button id="btn-profile-discard" class="secondary-btn profile-btn">Discard</button>
+            </div>
+            <ul id="profile-items" class="profile-items"></ul>
+            <div id="profile-status" class="hint"></div>
           </div>
         </div>
       </div>

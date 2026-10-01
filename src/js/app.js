@@ -26,6 +26,7 @@ import { shortcutMethods } from './shortcuts.js';
 import { interviewPanelMethods } from './interview-panel.js';
 import { earlySuggestionMethods } from './early-suggestions.js';
 import { toastMethods } from './toast.js';
+import { profileMethods } from './profile.js';
 
 class App {
     constructor() {
@@ -104,6 +105,7 @@ class App {
         this.transcriptUI.onChange = () => this._updateSessionChip();
         this.transcriptUI.onAfterRender = () => this._injectBrainstormButton();
         this._earlyInit();
+        this._profileInit();
 
         // Check platform — hide Local MLX on non-Apple-Silicon
         await this._checkPlatformSupport();
@@ -630,7 +632,7 @@ class App {
 }
 
 // Methods split into sibling modules are merged onto the prototype here.
-Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods, toastMethods);
+Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods, toastMethods, profileMethods);
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
