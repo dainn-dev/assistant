@@ -13,8 +13,15 @@ export const updaterMethods = {
         updater.onError = (err) => {
             const statusText = document.getElementById('update-status-text');
             if (statusText) statusText.textContent = `⚠️ Check failed: ${err.message || err}`;
+            // Startup checks fail silently (offline, no release yet) — only a
+            // manual click surfaces the persistent error pill.
+            if (this._manualUpdateCheck) {
+                this._manualUpdateCheck = false;
+                this._showToast?.(`Update check failed: ${err.message || err}`, 'error');
+            }
         };
         updater.onCheckComplete = (hasUpdate) => {
+            this._manualUpdateCheck = false;
             const checkBtn = document.getElementById('btn-check-update');
             if (checkBtn) checkBtn.classList.remove('spinning');
             if (!hasUpdate && !this._pendingUpdateVersion) {
@@ -30,16 +37,19 @@ export const updaterMethods = {
             if (checkBtn) checkBtn.classList.add('spinning');
             updater.checkForUpdates();
         }, 3000);
-    },
+    }
+,
 
 
     _triggerUpdateCheck() {
+        this._manualUpdateCheck = true;
         const statusText = document.getElementById('update-status-text');
         const checkBtn = document.getElementById('btn-check-update');
         if (statusText) statusText.textContent = 'Checking for updates...';
         if (checkBtn) checkBtn.classList.add('spinning');
         updater.checkForUpdates();
-    },
+    }
+,
 
 
     _onUpdateAvailable(version, notes) {
@@ -78,6 +88,7 @@ export const updaterMethods = {
 
         // Auto-hide hint after 8 seconds
         setTimeout(() => { if (hint.parentNode) hint.remove(); }, 8000);
-    },
+    }
+,
 
 };

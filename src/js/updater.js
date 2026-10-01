@@ -29,14 +29,8 @@ class Updater {
             return this._checkViaInvoke(invoke);
         }
 
-        // Debug: log what's available
-        console.log('[Updater] No updater API found!');
-        console.log('[Updater] __TAURI__ keys:', Object.keys(window.__TAURI__ || {}));
-        if (window.__TAURI__) {
-            for (const [k, v] of Object.entries(window.__TAURI__)) {
-                console.log(`[Updater]   __TAURI__.${k}:`, typeof v, v ? Object.keys(v) : 'null');
-            }
-        }
+        console.warn('[Updater] No updater API available on this platform');
+        if (this.onError) this.onError(new Error('Updater unavailable'));
         if (this.onCheckComplete) this.onCheckComplete(false);
     }
 
