@@ -8,7 +8,7 @@
 import { settingsManager } from './settings.js';
 import { SessionMetrics } from './metrics.js';
 
-const { invoke } = window.__TAURI__.core;
+import { invoke, Channel } from './ipc.js';
 
 export function normalizeSnapshot(text) {
     return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -242,7 +242,7 @@ export const earlySuggestionMethods = {
             snapshotLen: snapshot.length,
         });
 
-        const channel = new window.__TAURI__.core.Channel();
+        const channel = new Channel();
         channel.onmessage = (ev) => this._earlyOnEvent(requestId, ev);
 
         this._setInterviewSuggestionsStatus('Early suggestion…');

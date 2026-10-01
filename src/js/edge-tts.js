@@ -4,7 +4,7 @@
  * Returns base64 MP3 audio, played via audioPlayer.
  */
 
-const { invoke } = window.__TAURI__.core;
+import { invoke } from './ipc.js';
 
 class EdgeTTSRust {
     constructor() {

@@ -5,7 +5,7 @@ import { settingsManager } from './settings.js';
 import { audioPlayer } from './audio-player.js';
 import { updater } from './updater.js';
 
-const { invoke } = window.__TAURI__.core;
+import { invoke } from './ipc.js';
 
 // Single source for all language selects — previously ~200 lines of duplicated
 // <option> markup in index.html, and two-way A/B only offered the "Popular" subset.
@@ -580,8 +580,7 @@ export const settingsFormMethods = {
                     if (relaunch) {
                         await relaunch();
                     } else {
-                        const invoke = window.__TAURI__?.core?.invoke;
-                        if (invoke) await invoke('plugin:process|restart');
+                        await invoke('plugin:process|restart');
                     }
                 } catch (restartErr) {
                     // Restart failed (e.g. process plugin not available) but update IS installed

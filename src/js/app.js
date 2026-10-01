@@ -12,7 +12,7 @@ import { edgeTTSRust } from './edge-tts.js';
 import { audioPlayer } from './audio-player.js';
 import { updater } from './updater.js';
 
-const { invoke } = window.__TAURI__.core;
+import { invoke } from './ipc.js';
 const { getCurrentWindow } = window.__TAURI__.window;
 const { listen } = window.__TAURI__.event;
 

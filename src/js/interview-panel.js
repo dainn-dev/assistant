@@ -3,8 +3,8 @@
 
 import { settingsManager } from './settings.js';
 
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+import { invoke, listen } from './ipc.js';
+
 
 export const interviewPanelMethods = {
 

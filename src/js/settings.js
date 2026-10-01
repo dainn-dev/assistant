@@ -2,7 +2,7 @@
  * Settings Manager — handles loading/saving settings via Tauri IPC
  */
 
-const { invoke } = window.__TAURI__.core;
+import { invoke } from './ipc.js';
 
 // Default settings shape
 const DEFAULT_SETTINGS = {

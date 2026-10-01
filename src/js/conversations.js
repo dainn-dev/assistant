@@ -1,7 +1,7 @@
 // Sidebar session list, read-only transcript view, session meta
 // Extracted from app.js — methods are merged onto App.prototype via Object.assign.
 
-const { invoke } = window.__TAURI__.core;
+import { invoke } from './ipc.js';
 
 export const conversationMethods = {
 

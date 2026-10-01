@@ -8,7 +8,7 @@ import { edgeTTSRust } from './edge-tts.js';
 import { audioPlayer } from './audio-player.js';
 import { SessionMetrics } from './metrics.js';
 
-const { invoke } = window.__TAURI__.core;
+import { invoke, Channel } from './ipc.js';
 
 export const sessionMethods = {
 
@@ -311,7 +311,7 @@ export const sessionMethods = {
             } else {
                 let audioChunkCount = 0;
 
-                const channel = new window.__TAURI__.core.Channel();
+                const channel = new Channel();
                 channel.onmessage = (pcmData) => {
                     audioChunkCount++;
                     if (audioChunkCount <= 3 || audioChunkCount % 50 === 0) {
@@ -344,14 +344,14 @@ export const sessionMethods = {
     // after system is running, we keep going on system-only with a visible
     // warning rather than tearing down the whole session.
     async _startSplitCapture() {
-        const systemChannel = new window.__TAURI__.core.Channel();
+        const systemChannel = new Channel();
         systemChannel.onmessage = (pcmData) => {
             const bytes = new Uint8Array(pcmData);
             if (this._sonioxSec) this._sonioxSec.system += bytes.length / 32000;
             sonioxClient.sendAudio(bytes.buffer);
         };
 
-        const micChannel = new window.__TAURI__.core.Channel();
+        const micChannel = new Channel();
         micChannel.onmessage = (pcmData) => {
             const bytes = new Uint8Array(pcmData);
             if (this._sonioxSec) this._sonioxSec.mic += bytes.length / 32000;
@@ -398,7 +398,7 @@ export const sessionMethods = {
             }
             await invoke('start_capture', {
                 source: this.currentSource,
-                channel: new window.__TAURI__.core.Channel(), // dummy channel for permission check
+                channel: new Channel(), // dummy channel for permission check
             });
             await invoke('stop_capture');
         } catch (err) {
@@ -431,7 +431,7 @@ export const sessionMethods = {
         try {
             this._showToast('Starting local pipeline...', 'success');
 
-            this.localPipelineChannel = new window.__TAURI__.core.Channel();
+            this.localPipelineChannel = new Channel();
             this.localPipelineReady = false;
 
             this.localPipelineChannel.onmessage = (msg) => {
@@ -470,7 +470,7 @@ export const sessionMethods = {
 
         // Step 2: Start audio capture
         try {
-            const audioChannel = new window.__TAURI__.core.Channel();
+            const audioChannel = new Channel();
             let audioChunkCount = 0;
 
             audioChannel.onmessage = async (pcmData) => {
@@ -573,7 +573,7 @@ export const sessionMethods = {
         modal.style.display = 'flex';
 
         return new Promise((resolve, reject) => {
-            const channel = new window.__TAURI__.core.Channel();
+            const channel = new Channel();
 
             // Cancel handler
             const onCancel = () => {
