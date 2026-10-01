@@ -636,6 +636,17 @@ body.controls-hidden #drag-region {
 
 /* Live preview card in Settings → Display — mirrors the overlay's
    background, font and size so changes are visible immediately */
+/* Bright backdrop so the translucency change is obvious while dragging */
+.display-preview-backdrop {
+  background:
+    radial-gradient(80px 40px at 20% 60%, rgba(96, 165, 250, 0.55), transparent 70%),
+    radial-gradient(90px 45px at 80% 30%, rgba(236, 72, 153, 0.45), transparent 70%),
+    linear-gradient(135deg, #31427a, #233055);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
 .display-preview {
   background: var(--bg-primary);
   backdrop-filter: blur(30px) saturate(150%);
@@ -643,7 +654,6 @@ body.controls-hidden #drag-region {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
-  margin-bottom: 12px;
 }
 
 .display-preview .preview-original {
@@ -1849,7 +1859,9 @@ body.controls-hidden #drag-region {
    ═══════════════════════════════════════════════════════════ */
 
 #settings-view {
-  background: var(--bg-secondary);
+  /* Follow --overlay-alpha so dragging the opacity slider fades the
+     settings window itself — immediate feedback for the same setting. */
+  background: rgba(25, 25, 35, var(--overlay-alpha));
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   backdrop-filter: blur(30px) saturate(150%);
