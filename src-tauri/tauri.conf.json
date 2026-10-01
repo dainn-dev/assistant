@@ -51,7 +51,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1MkNFMzAxRUQ2QUY2OEMKUldTTTltcnRBZU1zUmJrb1VIaExodVBLb2JnSjlmL25neWttRlI4clYzSlhPMG1Vd2RQS2ZkNkwK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM1ODBBRDVBMzgzM0Q4NkEKUldScTJETTRXcTJBTmEvcW01aEx0MWUrYys3bnhSQUJMMDlIc1c3SjExamVJejJBZEVYN3JaQzQK",
       "endpoints": [
         "https://github.com/dainn-dev/assistant/releases/latest/download/latest.json"
       ]
