@@ -56,6 +56,11 @@
   --app-font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+/* The hidden attribute must beat any class-level display rule */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   width: 100%;
