@@ -161,6 +161,14 @@ export const conversationMethods = {
             const sessions = await invoke('list_transcripts');
             listEl.innerHTML = '';
 
+            if (!sessions.length) {
+                const li = document.createElement('li');
+                li.className = 'conversation-empty';
+                li.textContent = 'No saved conversations yet — record one and it shows up here.';
+                listEl.appendChild(li);
+                return;
+            }
+
             sessions.forEach(s => {
                 const meta = this._parseSessionMeta(s);
                 const li = document.createElement('li');

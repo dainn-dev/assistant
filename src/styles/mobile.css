@@ -33,6 +33,18 @@ body.mobile #drag-region {
   height: auto;
 }
 
+body.mobile {
+  --control-bar-height: 52px;
+}
+
+/* Window chrome makes no sense on mobile — reclaim the bar space */
+body.mobile #btn-pin,
+body.mobile #btn-minimize,
+body.mobile #btn-close,
+body.mobile #btn-hide-controls {
+  display: none;
+}
+
 /* Single-column layout */
 body.mobile #content-area {
   flex-direction: column;

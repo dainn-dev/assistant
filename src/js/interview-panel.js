@@ -40,7 +40,24 @@ export const interviewPanelMethods = {
         const show = this._isSuggestionsMode()
             && !this._interviewSuggestionsItems.length
             && !this._interviewSuggestionsClosed;
-        empty.textContent = this._suggestionsEmptyText();
+
+        // Actionable hint when suggestions can't run — LLM not configured.
+        const s = settingsManager.get();
+        const llmReady = !!(s.llm_url && s.llm_model && s.llm_api_key);
+        if (show && !llmReady) {
+            empty.textContent = 'Add an LLM endpoint in Settings → AI to enable suggestions';
+            empty.classList.add('actionable');
+            if (!empty._bound) {
+                empty._bound = true;
+                empty.addEventListener('click', () => {
+                    this._showView('settings');
+                    document.querySelector('.settings-tab[data-tab="tab-interview"]')?.click();
+                });
+            }
+        } else {
+            empty.textContent = this._suggestionsEmptyText();
+            empty.classList.remove('actionable');
+        }
         empty.hidden = !show;
     }
 ,
