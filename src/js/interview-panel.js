@@ -125,6 +125,7 @@ export const interviewPanelMethods = {
             }
         }
         this._updateChatInputState();
+        this._profileSyncTabVisibility?.();
     }
 ,
 

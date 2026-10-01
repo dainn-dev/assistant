@@ -60,7 +60,20 @@ export const profileMethods = {
             this._profileQueueSave({ id: 'summary', kind: 'summary', title: '', content: e.target.value });
         });
 
+        this._profileSyncTabVisibility();
         this._profileLoad();
+    }
+,
+
+    /// Profile only feeds Interview mode — hide the tab otherwise. If the user
+    /// is on it when the mode changes away, fall back to the first tab.
+    _profileSyncTabVisibility() {
+        const tab = document.querySelector('.settings-tab[data-tab="tab-profile"]');
+        const show = this.currentTemplate === 'Interview';
+        if (tab) tab.style.display = show ? '' : 'none';
+        if (!show && tab?.classList.contains('active')) {
+            document.querySelector('.settings-tab[data-tab="tab-translation"]')?.click();
+        }
     }
 ,
 

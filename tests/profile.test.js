@@ -34,9 +34,12 @@ function el() {
 }
 
 let els;
+let profileTab;
 globalThis.document = {
     getElementById: (id) => els[id] || (els[id] = el()),
     createElement: () => el(),
+    querySelector: (sel) => (sel.includes('tab-profile') ? profileTab : null),
+    querySelectorAll: () => [],
     activeElement: null,
 };
 
@@ -50,6 +53,7 @@ function app() {
 
 beforeEach(() => {
     els = {};
+    profileTab = el();
     invokeCalls.length = 0;
     invokeImpl = async () => [];
 });
@@ -113,6 +117,16 @@ describe('profile render + save', () => {
         await a._profileDraft();
         expect(document.getElementById('profile-status').textContent).toContain('Upload a CV first');
         expect(invokeCalls.filter((c) => c.cmd === 'save_profile_item')).toHaveLength(0);
+    });
+
+    it('Profile tab hidden unless Interview mode', () => {
+        const a = app();
+        a.currentTemplate = null;
+        a._profileSyncTabVisibility();
+        expect(profileTab.style.display).toBe('none');
+        a.currentTemplate = 'Interview';
+        a._profileSyncTabVisibility();
+        expect(profileTab.style.display).toBe('');
     });
 
     it('accept saves draft items and clears draft flag', async () => {
