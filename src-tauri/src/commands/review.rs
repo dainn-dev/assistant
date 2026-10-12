@@ -117,7 +117,9 @@ pub fn review_session(
     );
 
     let client = http_client()?;
-    let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt)?;
+    // Review JSON holds up to ~5 scored questions + practice list — a small
+    // max_tokens would cut the object mid-stream and fail JSON parsing.
+    let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt, 4000)?;
     let now = chrono::Utc::now().to_rfc3339();
     let review = parse_review(&raw, &llm_model, roles_known, has_candidate, &now)?;
     write_review(&dir, &filename, &review)?;

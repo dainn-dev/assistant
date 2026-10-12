@@ -848,7 +848,7 @@ Interviewer's question / task focus:\n\
         query_text = query_text,
     );
 
-    let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt)?;
+    let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt, 600)?;
     let suggestions = parse_suggestions_from_llm(&raw, st);
 
     let debug = if req.debug == Some(true) {

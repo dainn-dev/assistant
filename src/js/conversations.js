@@ -188,7 +188,7 @@ export const conversationMethods = {
                     : '';
                 li.innerHTML = `
                     <span class="conversation-label">🗨 ${meta.date} ${meta.time}${badge}</span>
-                    <button type="button" class="btn-review-conversation" title="Review this session with the LLM" aria-label="Review session">✦</button>
+                    <button type="button" class="btn-review-conversation" title="Summary" aria-label="Summary">✦</button>
                     <button type="button" class="btn-remove-conversation" title="Delete conversation" aria-label="Delete conversation">×</button>
                 `;
 

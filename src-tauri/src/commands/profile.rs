@@ -138,7 +138,7 @@ pub fn draft_profile_from_documents(
     );
 
     let client = crate::commands::interview::http_client()?;
-    let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt)?;
+    let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt, 1500)?;
     let now = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     parse_profile_draft(&raw, &user_id, &now)
 }

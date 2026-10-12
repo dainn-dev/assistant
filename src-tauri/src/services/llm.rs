@@ -10,11 +10,12 @@ pub fn complete_suggestions(
     api_key: &str,
     model: &str,
     prompt: &str,
+    max_tokens: u32,
 ) -> Result<String, String> {
     let body = json!({
         "model": model,
         "temperature": 0.5,
-        "max_tokens": 600,
+        "max_tokens": max_tokens,
         "messages": [{ "role": "user", "content": prompt }],
     });
 
@@ -25,8 +26,11 @@ pub fn complete_suggestions(
         .send()
         .map_err(|e| format!("LLM request: {e}"))?;
 
-    if !resp.status().is_success() {
-        return Err(resp.text().unwrap_or_default());
+    let status = resp.status();
+    let text = resp.text().map_err(|e| format!("LLM response body: {e}"))?;
+    if !status.is_success() {
+        let snippet: String = text.chars().take(200).collect();
+        return Err(format!("LLM HTTP {status}: {snippet}"));
     }
 
     #[derive(Deserialize)]
@@ -42,7 +46,12 @@ pub fn complete_suggestions(
         choices: Vec<Choice>,
     }
 
-    let root: Root = resp.json().map_err(|e| e.to_string())?;
+    // Read as text first so a proxy returning HTML/SSE/empty bodies surfaces
+    // what it actually sent instead of a bare "error decoding response body".
+    let root: Root = serde_json::from_str(&text).map_err(|e| {
+        let snippet: String = text.chars().take(200).collect();
+        format!("LLM response is not JSON: {e} — body: {snippet}")
+    })?;
     root.choices
         .into_iter()
         .next()

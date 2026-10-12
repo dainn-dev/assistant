@@ -99,15 +99,30 @@ describe('review flow', () => {
         expect(document.getElementById('review-panel').hidden).toBe(false);
     });
 
-    it('Review button on unreviewed session confirms then invokes review_session', async () => {
-        invokeImpl = async (cmd) => (cmd === 'review_session' ? REVIEW : null);
+    it('Summary button invokes review_session directly and shows busy state in-flight', async () => {
+        let resolveReview;
+        invokeImpl = async (cmd) => (cmd === 'review_session'
+            ? new Promise((r) => { resolveReview = r; })
+            : null);
         const a = app();
         a._reviewTranscriptKb = 42;
-        await a._reviewGenerate('x.md', false);
-        expect(confirm).toHaveBeenCalled();
+
+        const p = a._reviewGenerate('x.md', false);
+
+        // While the LLM call is in flight the user sees the panel + spinner —
+        // no blocking confirm, no dead/frozen UI.
+        expect(confirm).not.toHaveBeenCalled();
+        expect(els['review-panel'].hidden).toBe(false);
+        expect(els['review-status'].innerHTML).toContain('Summarizing');
+        expect(els['btn-review-regenerate'].disabled).toBe(true);
+
+        resolveReview(REVIEW);
+        await p;
+
         const call = invokeCalls.find((c) => c.cmd === 'review_session');
         expect(call.args).toEqual({ filename: 'x.md', force: false });
         expect(a._loadConversationList).toHaveBeenCalled();
+        expect(els['btn-review-regenerate'].disabled).toBe(false);
     });
 
     it('null scores render em-dash', async () => {

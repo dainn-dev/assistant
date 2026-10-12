@@ -774,6 +774,9 @@ export const sessionMethods = {
     /// Also keeps the quick-new button label honest ("Save & New" only
     /// when there is something to save, "+ New" otherwise).
     _updateSessionChip() {
+        // Live capture shows the subtitle tail; paused/draft/history shows
+        // every line in sessionLog.
+        this.transcriptUI?.setTailOnly?.(this.isRunning);
         const chip = document.getElementById('session-chip');
         if (!chip) return;
         const newBtn = document.getElementById('btn-quick-new');

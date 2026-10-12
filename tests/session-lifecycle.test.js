@@ -144,6 +144,71 @@ describe('session lifecycle', () => {
         expect(app.transcriptUI.sessionLog.length).toBe(1);
     });
 
+    test('paused draft renders every line; live capture shows only the tail', async () => {
+        const app = makeApp();
+        app._updateSessionChip = sessionMethods._updateSessionChip; // real wiring
+        const ui = app.transcriptUI;
+        app.isRunning = true;
+        app.recordingStartTime = Date.now();
+
+        // >90-char originals → one subtitle chunk per segment → 30 chunks total
+        const pad = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore';
+        for (let i = 0; i < 30; i++) {
+            ui.addOriginal(`${pad} ${i}`, 'S1', 'en', 'system');
+            ui.addTranslation(`dịch ${i}`, 'system');
+        }
+
+        const pairCount = () =>
+            (ui.contentEl.innerHTML.match(/class="subtitle-pair/g) || []).length;
+
+        expect(ui.tailOnly).toBe(true);
+        expect(pairCount()).toBeLessThanOrEqual(8); // MAX_CHUNKS tail
+
+        await app.stop();
+
+        expect(ui.tailOnly).toBe(false);
+        expect(pairCount()).toBe(ui.sessionLog.length); // full draft visible
+        expect(pairCount()).toBeGreaterThan(8);
+    });
+
+    test('opening a saved conversation renders the full transcript, not just the tail', async () => {
+        const app = makeApp();
+        app._updateSessionChip = sessionMethods._updateSessionChip; // real wiring
+
+        const pad = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore';
+        const segs = [];
+        for (let i = 0; i < 30; i++) {
+            segs.push({
+                id: i + 1,
+                original: `${pad} ${i}`,
+                translation: `dịch ${i}`,
+                status: 'translated',
+                speaker: '1',
+                source: 'system',
+                createdAt: 1791770984145 + i * 60_000, // 1min apart → many chunks
+            });
+        }
+        // A segment that never got translated renders in place — not dropped,
+        // not hoisted to the bottom as a fake "pending" block.
+        segs.splice(5, 0, {
+            id: 99, original: 'untranslated mid-session line', translation: null,
+            status: 'original', speaker: '2', source: 'system',
+            createdAt: 1791770984145 + 5 * 60_000 + 1000,
+        });
+        invokeImpl = async (cmd) => (cmd === 'read_transcript_segments'
+            ? { version: 2, segments: segs }
+            : null);
+
+        await app._openConversation('2026-10-01_10-00-00.md');
+
+        const pairCount =
+            (app.transcriptUI.contentEl.innerHTML.match(/class="subtitle-pair/g) || []).length;
+
+        expect(app.transcriptUI.tailOnly).toBe(false);
+        expect(app.transcriptUI.segments.length).toBe(31); // display buffer not trimmed
+        expect(pairCount).toBe(31);                        // every chunk rendered
+    });
+
     test('+New saves dirty session then resets sessionLog', async () => {
         const app = makeApp();
         app.sessionActive = true;

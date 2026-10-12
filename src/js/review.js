@@ -56,12 +56,9 @@ export const reviewMethods = {
             this._reviewShow();
             return;
         }
-        const kb = this._reviewTranscriptKb ? ` ~${this._reviewTranscriptKb} KB of transcript` : '';
-        const verb = force ? 'Regenerate the review' : 'Review this interview';
-        if (!confirm(`${verb} with the LLM? One request,${kb}.`)) return;
-
-        const status = document.getElementById('review-status');
-        if (status) status.textContent = 'Reviewing…';
+        const regen = document.getElementById('btn-review-regenerate');
+        if (regen) regen.disabled = true;
+        this._reviewShowLoading();
         try {
             const review = await invoke('review_session', { filename, force });
             this._review = review;
@@ -70,9 +67,27 @@ export const reviewMethods = {
             this._reviewShow();
             this._loadConversationList?.(); // refresh ★ badge
         } catch (err) {
-            if (status) status.textContent = '';
-            this._showToast(`Review failed: ${err}`, 'error');
+            const status = document.getElementById('review-status');
+            if (status) status.textContent = `Failed — ${err}`;
+            this._showToast(`Summary failed: ${err}`, 'error');
+        } finally {
+            if (regen) regen.disabled = false;
         }
+    }
+,
+
+    /// Panel opens instantly with a busy indicator so a slow LLM call never
+    /// looks like a frozen app.
+    _reviewShowLoading() {
+        this._reviewShow();
+        const status = document.getElementById('review-status');
+        if (status) status.innerHTML = '<span class="review-spinner"></span> Summarizing…';
+        const overall = document.getElementById('review-overall');
+        if (overall) overall.textContent = '';
+        const list = document.getElementById('review-questions');
+        if (list) list.innerHTML = '';
+        const wrap = document.getElementById('review-practice-wrap');
+        if (wrap) wrap.hidden = true;
     }
 ,
 

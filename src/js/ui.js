@@ -24,6 +24,9 @@ export class TranscriptUI {
         this.segments = [];
         // sessionLog: parallel array — never trimmed, holds complete session history
         this.sessionLog = [];
+        // tailOnly: live capture renders just the newest subtitle chunks;
+        // paused/draft/history renders the full sessionLog so nothing is hidden.
+        this.tailOnly = true;
         this._nextSegId = 1;
         // Provisional (in-progress) recognition tail, tracked per source so a
         // mic partial never overwrites the interviewer line being shown.
@@ -73,6 +76,22 @@ export class TranscriptUI {
             }
             this._render();
         }
+    }
+
+    /**
+     * Live capture shows only the newest chunks (subtitle tail); paused,
+     * draft, and loaded-history states show every line in sessionLog.
+     */
+    setTailOnly(on) {
+        const v = !!on;
+        if (v === this.tailOnly) return;
+        this.tailOnly = v;
+        if (this.contentEl) this._render();
+    }
+
+    /** Segments to render: trimmed tail while live, full session otherwise. */
+    _displaySegments() {
+        return this.tailOnly ? this.segments : this.sessionLog;
     }
 
     /**
@@ -291,7 +310,10 @@ export class TranscriptUI {
      */
     getPlainText() {
         let lines = [];
-        for (const seg of this.segments) {
+        // sessionLog is the untrimmed superset — copy should get every line,
+        // not just the visible tail.
+        const segs = this.sessionLog.length ? this.sessionLog : this.segments;
+        for (const seg of segs) {
             if (seg.original) lines.push(seg.original);
             if (seg.translation) lines.push(seg.translation);
             if (seg.original || seg.translation) lines.push('');
@@ -392,6 +414,9 @@ export class TranscriptUI {
     loadSegments(segments, { replaceSessionLog = true } = {}) {
         this._removeListening();
         this._ensureContent();
+        // A loaded transcript is history — render it whole, and don't let
+        // _trimSegments shred the display buffer before setTailOnly runs.
+        this.tailOnly = false;
         this.segments = Array.isArray(segments) ? segments : [];
         if (replaceSessionLog) this.sessionLog = this.segments.map(s => ({ ...s }));
         this._clearProvisionalAll();
@@ -460,9 +485,10 @@ export class TranscriptUI {
         const isWeakBoundary = (text) => /[,;:]\s*$/.test(text);
         const cleanJoin = (parts) => parts.join(' ').replace(/\s+/g, ' ').trim();
 
-        const translated = this.segments.filter(s => s.status === 'translated' && s.translation);
-        const pendingOriginals = this.segments.filter(s => s.status === 'original' && s.original);
-        const chatSegs = this.segments.filter(s => s.status === 'chat' && s.original);
+        const src = this._displaySegments();
+        const translated = src.filter(s => s.status === 'translated' && s.translation);
+        const pendingOriginals = src.filter(s => s.status === 'original' && s.original);
+        const chatSegs = src.filter(s => s.status === 'chat' && s.original);
 
         const chunks = [];
         let enBuf = [];
@@ -485,9 +511,12 @@ export class TranscriptUI {
             viBuf = [];
         };
 
-        // Iterate in original order but only handle translated + chat
-        const ordered = this.segments.filter(s =>
+        // Iterate in original order but only handle translated + chat.
+        // History/paused also shows untranslated originals in place — no
+        // translation is coming, so hiding them would lose saved lines.
+        const ordered = src.filter(s =>
             (s.status === 'translated' && s.translation) || (s.status === 'chat' && s.original)
+            || (!this.tailOnly && s.status === 'original' && s.original)
         );
 
         const GAP_MS = 5000;
@@ -524,7 +553,7 @@ export class TranscriptUI {
             lastSegTime = seg.createdAt || lastSegTime;
 
             const en = (seg.original || '').trim();
-            const vi = (seg.translation || '').trim();
+            const vi = (seg.translation || '').trim() || (seg.status === 'original' ? '…' : '');
             if (en) enBuf.push(en);
             if (vi) viBuf.push(vi);
             lastMeta = seg;
@@ -547,14 +576,16 @@ export class TranscriptUI {
         }
         flush();
 
-        // Keep only the newest few chunks (like subtitles)
+        // Keep only the newest few chunks while live (like subtitles);
+        // paused/history renders the entire chunk list.
         const MAX_CHUNKS = 8;
-        const recent = chunks.slice(-MAX_CHUNKS);
+        const recent = this.tailOnly ? chunks.slice(-MAX_CHUNKS) : chunks;
 
-        // Append a pending block at bottom (EN only + VI ellipsis)
+        // Append a pending block at bottom (EN only + VI ellipsis) — live
+        // only; history already renders its originals in place above.
         let pendingEn = '';
         let pendingSpeaker = null;
-        if (pendingOriginals.length > 0) {
+        if (this.tailOnly && pendingOriginals.length > 0) {
             pendingEn = cleanJoin(pendingOriginals.slice(-2).map(s => s.original.trim()));
             pendingSpeaker = pendingOriginals[pendingOriginals.length - 1]?.speaker || null;
         } else if (this.provisionalText) {
@@ -615,7 +646,7 @@ export class TranscriptUI {
         let lastRenderedSpeaker = null;
         let lastRenderedLang = null;
 
-        for (const seg of this.segments) {
+        for (const seg of this._displaySegments()) {
             // Speaker label
             if (seg.speaker && seg.speaker !== lastRenderedSpeaker) {
                 html += `<span class="speaker-label">Speaker ${seg.speaker}:</span> `;
@@ -633,8 +664,11 @@ export class TranscriptUI {
                 html += `<div class="seg-block">`;
                 html += `<div class="seg-translated${confidenceClass}">${this._esc(seg.translation)}</div>`;
                 html += `</div>`;
+            } else if (!this.tailOnly && seg.status === 'original' && seg.original) {
+                // History/paused: no translation is coming — show the original dimmed.
+                html += `<div class="seg-block"><div class="seg-provisional">${this._esc(seg.original)}</div></div>`;
             }
-            // Skip 'original' segments in single mode — wait for translation
+            // Live mode skips 'original' segments — wait for translation
         }
 
         if (this.provisionalText) {
@@ -668,7 +702,7 @@ export class TranscriptUI {
         let lastSpeaker = null;
         let lastLang = null;
 
-        for (const seg of this.segments) {
+        for (const seg of this._displaySegments()) {
             let speakerHtml = '';
             if (seg.speaker && seg.speaker !== lastSpeaker) {
                 speakerHtml = `<div class="speaker-label">Speaker ${seg.speaker}:</div>`;
@@ -752,6 +786,8 @@ export class TranscriptUI {
     }
 
     _trimSegments() {
+        // Paused/history view renders from sessionLog — don't drop anything.
+        if (!this.tailOnly) return;
         let totalLen = 0;
         for (const seg of this.segments) {
             totalLen += (seg.translation || seg.original || '').length;
