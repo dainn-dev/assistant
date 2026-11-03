@@ -127,6 +127,9 @@ describe('profile render + save', () => {
         a.currentTemplate = 'Interview';
         a._profileSyncTabVisibility();
         expect(profileTab.style.display).toBe('');
+        a.currentTemplate = 'Meeting'; // meeting preset has no profile
+        a._profileSyncTabVisibility();
+        expect(profileTab.style.display).toBe('none');
     });
 
     it('accept saves draft items and clears draft flag', async () => {

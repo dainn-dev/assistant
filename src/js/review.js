@@ -10,6 +10,44 @@ export function formatScore(score) {
     return '●'.repeat(n) + '○'.repeat(5 - n);
 }
 
+/** Meeting minutes as titled lists; empty sections are omitted. */
+export function minutesSections(review) {
+    const actionItem = (a) => {
+        let text = a.task;
+        if (a.owner) text += ` — ${a.owner}`;
+        if (a.due) text += ` (due ${a.due})`;
+        return text;
+    };
+    return [
+        { title: 'Decisions', items: review.decisions || [] },
+        { title: 'Action items', items: (review.action_items || []).map(actionItem) },
+        { title: 'Open questions', items: review.open_questions || [] },
+    ].filter((s) => s.items.length > 0);
+}
+
+/** Plain-text review for the clipboard — minutes or scored interview. */
+export function reviewAsText(r) {
+    const lines = [`Overall: ${r.overall}`, ''];
+    if (r.kind === 'minutes') {
+        for (const s of minutesSections(r)) {
+            lines.push(`${s.title}:`, ...s.items.map((i) => `- ${i}`), '');
+        }
+        return lines.join('\n');
+    }
+    for (const q of r.questions || []) {
+        lines.push(`Q: ${q.question}`);
+        if (q.answer_summary) lines.push(`A: ${q.answer_summary}`);
+        lines.push(`Score: ${formatScore(q.score)}  ${q.feedback}`);
+        if (q.stronger_answer) lines.push(`Better: ${q.stronger_answer}`);
+        lines.push('');
+    }
+    if (r.practice?.length) {
+        lines.push('Practice:');
+        r.practice.forEach((p) => lines.push(`- ${p}`));
+    }
+    return lines.join('\n');
+}
+
 export const reviewMethods = {
 
     _reviewInit() {
@@ -149,6 +187,24 @@ export const reviewMethods = {
         if (overall) overall.textContent = review.overall || '';
 
         list.innerHTML = '';
+        if (review.kind === 'minutes') {
+            for (const section of minutesSections(review)) {
+                const li = document.createElement('li');
+                li.className = 'review-card';
+                const title = document.createElement('div');
+                title.className = 'review-q';
+                title.textContent = section.title;
+                li.appendChild(title);
+                const ul = document.createElement('ul');
+                for (const item of section.items) {
+                    const entry = document.createElement('li');
+                    entry.textContent = item;
+                    ul.appendChild(entry);
+                }
+                li.appendChild(ul);
+                list.appendChild(li);
+            }
+        }
         for (const q of review.questions || []) {
             const li = document.createElement('li');
             li.className = 'review-card';
@@ -202,20 +258,8 @@ export const reviewMethods = {
     async _reviewCopy() {
         const r = this._review;
         if (!r) return;
-        const lines = [`Overall: ${r.overall}`, ''];
-        for (const q of r.questions || []) {
-            lines.push(`Q: ${q.question}`);
-            if (q.answer_summary) lines.push(`A: ${q.answer_summary}`);
-            lines.push(`Score: ${formatScore(q.score)}  ${q.feedback}`);
-            if (q.stronger_answer) lines.push(`Better: ${q.stronger_answer}`);
-            lines.push('');
-        }
-        if (r.practice?.length) {
-            lines.push('Practice:');
-            r.practice.forEach((p) => lines.push(`- ${p}`));
-        }
         try {
-            await navigator.clipboard.writeText(lines.join('\n'));
+            await navigator.clipboard.writeText(reviewAsText(r));
             this._showToast('Review copied', 'success');
         } catch {
             this._showToast('Copy failed', 'error');

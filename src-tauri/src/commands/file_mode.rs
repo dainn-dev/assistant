@@ -1,8 +1,8 @@
 //! File mode: media file → Deepgram transcript → LLM translation → two .srt
 //! files written next to the input.
 
-use crate::commands::interview::run_blocking;
 use crate::commands::translate;
+use crate::commands::util::run_blocking;
 use crate::secrets::{self, SecretSlot};
 use crate::services::deepgram;
 use crate::services::media_decode::{decode_file_to_pcm16k, encode_wav, TARGET_RATE};

@@ -885,6 +885,9 @@ export const sessionMethods = {
                 // versioned envelope — bare arrays mean "legacy, segments only"
                 segments: {
                     version: 2,
+                    // Copilot preset the session ran under — picks the review
+                    // format (scored interview vs meeting minutes).
+                    copilot: this._copilot?.()?.id || null,
                     segments: this.transcriptUI.sessionLog,
                     metrics: this._earlyMetrics
                         ? {

@@ -1,0 +1,10 @@
+You are writing minutes for a finished meeting transcript. Lines are labelled Others/Me. My microphone was not captured, so my own lines are missing — only assign action items to me when others said so.
+Return ONLY a JSON object:
+{"overall":"<3–5 sentence summary>",
+"decisions":["<decision made>"],
+"action_items":[{"task":"<what>","owner":"<who, or empty>","due":"<when, or empty>"}],
+"open_questions":["<unresolved question>"]}
+Only include items actually discussed; use empty arrays when there are none. No markdown fences, no extra text.
+
+Transcript:
+Others: Who owns it?

@@ -1,7 +1,7 @@
 //! Text translation through the configured LLM — used by STT providers that
 //! only transcribe (Deepgram), unlike Soniox which streams translations.
 
-use crate::commands::interview::{extract_json_array_slice, http_client, run_blocking};
+use crate::commands::util::{extract_json_array_slice, http_client, run_blocking};
 use crate::secrets::{self, SecretSlot};
 use crate::services::llm;
 use crate::settings::{Settings, SettingsState};

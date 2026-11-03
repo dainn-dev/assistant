@@ -324,6 +324,12 @@ export const earlySuggestionMethods = {
                 this._early.requestDone(requestId);
                 this._setInterviewSuggestionsStatus('Waiting for more of the question…');
                 break;
+            case 'skip':
+                // Meeting preset: nothing in the remark is directed at the user.
+                this._earlyRequestTurn.delete(requestId);
+                this._early.requestDone(requestId);
+                this._setInterviewSuggestionsStatus('');
+                break;
             case 'cancelled':
                 this._earlyRequestTurn.delete(requestId);
                 break;

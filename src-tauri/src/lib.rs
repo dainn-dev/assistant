@@ -1,5 +1,6 @@
 mod audio;
 mod commands;
+mod copilot;
 mod db;
 mod secrets;
 mod services;
@@ -65,7 +66,7 @@ pub fn run() {
         .manage(LocalPipelineState {
             process: Mutex::new(None),
         })
-        .manage(commands::interview::SuggestStreamState::default())
+        .manage(commands::interview::stream::SuggestStreamState::default())
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -90,12 +91,12 @@ pub fn run() {
             commands::secrets::interview_clear_api_key,
             commands::secrets::interview_has_api_key,
             commands::secrets::interview_key_status,
-            commands::interview::ingest_interview_files,
-            commands::interview::save_interview_message,
-            commands::interview::suggest_interview_answers,
-            commands::interview::suggest_interview_answers_stream,
-            commands::interview::cancel_suggestion_stream,
-            commands::interview::select_context_excerpts,
+            commands::interview::ingest::ingest_interview_files,
+            commands::interview::suggest::save_interview_message,
+            commands::interview::suggest::suggest_interview_answers,
+            commands::interview::stream::suggest_interview_answers_stream,
+            commands::interview::stream::cancel_suggestion_stream,
+            commands::interview::excerpts::select_context_excerpts,
             commands::profile::list_profile,
             commands::profile::save_profile_item,
             commands::profile::delete_profile_item,

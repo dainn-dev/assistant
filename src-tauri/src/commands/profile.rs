@@ -1,7 +1,7 @@
 //! Candidate profile CRUD — persistent summary / STAR stories / strengths that
 //! join CV/JD excerpts in grounding interview suggestions.
 
-use crate::commands::interview::{extract_json_array_slice, run_blocking};
+use crate::commands::util::{extract_json_array_slice, run_blocking};
 use crate::db::{self, InterviewDb, ProfileItem};
 use crate::secrets::{self, SecretSlot};
 use crate::services::llm;
@@ -152,7 +152,7 @@ fn draft_profile_blocking(
         Candidate CV:\n{cv}"
     );
 
-    let client = crate::commands::interview::http_client()?;
+    let client = crate::commands::util::http_client()?;
     let raw = llm::complete_suggestions(&client, &llm_url, &llm_key, &llm_model, &prompt, 1500)?;
     let now = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     parse_profile_draft(&raw, &user_id, &now)

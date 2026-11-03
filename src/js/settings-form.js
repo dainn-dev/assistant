@@ -5,6 +5,7 @@ import { settingsManager } from './settings.js';
 import { audioPlayer } from './audio-player.js';
 import { updater } from './updater.js';
 import { LANG_NAMES } from './languages.js';
+import { COPILOT_PRESETS, normalizeAppMode } from './copilot-presets.js';
 
 import { invoke } from './ipc.js';
 
@@ -291,7 +292,14 @@ export const settingsFormMethods = {
         const llmKey = document.getElementById('llm-api-key');
         if (llmKey) llmKey.value = s.llm_api_key || '';
         const appMode = document.getElementById('select-app-mode');
-        if (appMode) appMode.value = s.app_mode || '';
+        if (appMode) {
+            if (appMode.options.length === 1) {
+                for (const p of COPILOT_PRESETS) {
+                    appMode.add(new Option(`${p.label} — ${p.description}`, p.mode));
+                }
+            }
+            appMode.value = normalizeAppMode(s.app_mode);
+        }
         const suggestionType = document.getElementById('select-suggestion-type');
         if (suggestionType) {
             const v = s.suggestion_type || 'translation';
@@ -386,8 +394,7 @@ export const settingsFormMethods = {
         settings.llm_api_key = document.getElementById('llm-api-key')?.value?.trim() || '';
         const st = document.getElementById('select-suggestion-type')?.value || 'translation';
         settings.suggestion_type = ['target', 'translation', 'both'].includes(st) ? st : 'translation';
-        const am = document.getElementById('select-app-mode')?.value || '';
-        settings.app_mode = am === 'Interview' ? am : '';
+        settings.app_mode = normalizeAppMode(document.getElementById('select-app-mode')?.value);
         settings.early_suggestions = document.getElementById('check-early-suggestions')?.checked === true;
 
         try {
@@ -414,7 +421,7 @@ export const settingsFormMethods = {
     // ─── Apply Settings ────────────────────────────────────
 
     _updateChatInputState() {
-        const isInterview = this.currentTemplate === 'Interview';
+        const isInterview = !!this._copilot();
         const panel = document.getElementById('chat-panel');
         if (panel) panel.style.display = isInterview ? '' : 'none';
         const input = document.getElementById('chat-input');

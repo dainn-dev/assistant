@@ -4,6 +4,7 @@
 // Extracted pattern: same mixin style as session.js / interview-panel.js.
 
 import { invoke } from './ipc.js';
+import { copilotPreset } from './copilot-presets.js';
 
 const SAVE_DEBOUNCE_MS = 600;
 const PROFILE_KINDS = { story: 'STORY', strength: 'STRENGTH' };
@@ -69,7 +70,7 @@ export const profileMethods = {
     /// is on it when the mode changes away, fall back to the first tab.
     _profileSyncTabVisibility() {
         const tab = document.querySelector('.settings-tab[data-tab="tab-profile"]');
-        const show = this.currentTemplate === 'Interview';
+        const show = !!copilotPreset(this.currentTemplate)?.hasProfile;
         if (tab) tab.style.display = show ? '' : 'none';
         if (!show && tab?.classList.contains('active')) {
             document.querySelector('.settings-tab[data-tab="tab-translation"]')?.click();

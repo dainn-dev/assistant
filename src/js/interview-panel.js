@@ -1,27 +1,58 @@
-// Interview mode: suggestions panel, uploads/ingest, chat, streaming render
+// Copilot mode (interview / meeting presets): suggestions panel,
+// uploads/ingest, chat, streaming render.
 // Extracted from app.js — methods are merged onto App.prototype via Object.assign.
 
 import { settingsManager } from './settings.js';
+import { copilotPreset, pickedUploadsSurvive } from './copilot-presets.js';
 
 import { invoke, listen } from './ipc.js';
 
 
 export const interviewPanelMethods = {
 
+    /** Active copilot preset, or null in plain-translator mode. */
+    _copilot() {
+        return copilotPreset(this.currentTemplate);
+    }
+,
+
+
     _isSuggestionsMode() {
-        return this.currentTemplate === 'Interview';
+        return !!this._copilot();
     }
 ,
 
 
     _suggestionsPanelTitle() {
-        return 'Suggested answers';
+        return this._copilot()?.panelTitle || 'Suggested answers';
     }
 ,
 
 
     _suggestionsEmptyText() {
-        return 'Waiting for interviewer question…';
+        return this._copilot()?.emptyText || 'Waiting for interviewer question…';
+    }
+,
+
+
+    /** Upload button / pill labels follow the preset's slots (CV/JD, Brief/Agenda). */
+    _updateCopilotUploadLabels() {
+        const preset = this._copilot();
+        if (!preset) return;
+        const { a, b } = preset.uploads;
+        const setText = (id, text) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        };
+        setText('pill-cv-label', `${a}:`);
+        setText('pill-jd-label', `${b}:`);
+        document.getElementById('pill-cv-clear')?.setAttribute('aria-label', `Clear ${a}`);
+        document.getElementById('pill-jd-clear')?.setAttribute('aria-label', `Clear ${b}`);
+        const btn = document.getElementById('btn-upload-interview-files');
+        if (btn) {
+            btn.title = `Upload ${a} & ${b} (.pdf/.docx)`;
+            btn.setAttribute('aria-label', `Upload ${a} & ${b}`);
+        }
     }
 ,
 
@@ -84,25 +115,28 @@ export const interviewPanelMethods = {
         const prevMode = this.currentTemplate;
         this.currentTemplate = mode || null;
         if (prevMode !== this.currentTemplate) this._earlyBumpEpoch?.();
-        if (
-            prevMode !== this.currentTemplate
-            && prevMode
-            && this.currentTemplate
-            && prevMode === 'Interview'
-            && this.currentTemplate === 'Interview'
-        ) {
+        // Switching between presets: the other preset's suggestions don't apply.
+        if (prevMode && this.currentTemplate && prevMode !== this.currentTemplate) {
             this._clearSuggestionsPanel();
         }
         if (this._isSuggestionsMode()) {
             this._interviewSuggestionsClosed = false;
         }
+        const presetId = this._copilot()?.id || null;
+        if (!pickedUploadsSurvive(this._uploadsPresetId, presetId)) {
+            this._interviewCvFile = null;
+            this._interviewJdFile = null;
+            this._updateInterviewUploadPills();
+        }
+        if (presetId) this._uploadsPresetId = presetId;
+        this._updateCopilotUploadLabels();
 
         // Mobile: mark body classes for mode-specific UI
-        document.body.classList.toggle('interview-active', this.currentTemplate === 'Interview');
+        document.body.classList.toggle('copilot-active', !!this._copilot());
         document.body.classList.toggle('suggestions-active', this._isSuggestionsMode());
 
         const uploads = document.getElementById('interview-uploads');
-        if (uploads) uploads.style.display = this.currentTemplate === 'Interview' ? '' : 'none';
+        if (uploads) uploads.style.display = this._copilot() ? '' : 'none';
         const sugPanel = document.getElementById('interview-suggestions-panel');
         if (!this._isSuggestionsMode()) {
             if (sugPanel) sugPanel.style.display = 'none';
@@ -120,7 +154,7 @@ export const interviewPanelMethods = {
                 this._dockInterviewSuggestionsRight();
                 this._setRightPanelCollapsed(true);
             }
-            if (this.currentTemplate === 'Interview') {
+            if (this._copilot()) {
                 this._scheduleInterviewIngest();
             }
         }
@@ -231,7 +265,7 @@ export const interviewPanelMethods = {
 
         if (pillCv && pillCvName) {
             if (this._interviewCvFile) {
-                pillCvName.textContent = this._interviewCvFile.name || 'CV';
+                pillCvName.textContent = this._interviewCvFile.name || (this._copilot()?.uploads.a ?? 'CV');
                 pillCv.style.display = '';
             } else {
                 pillCvName.textContent = '';
@@ -241,7 +275,7 @@ export const interviewPanelMethods = {
 
         if (pillJd && pillJdName) {
             if (this._interviewJdFile) {
-                pillJdName.textContent = this._interviewJdFile.name || 'JD';
+                pillJdName.textContent = this._interviewJdFile.name || (this._copilot()?.uploads.b ?? 'JD');
                 pillJd.style.display = '';
             } else {
                 pillJdName.textContent = '';
@@ -335,7 +369,7 @@ export const interviewPanelMethods = {
         input.value = '';
         this.transcriptUI?.addChatMessage?.(text, 'ME');
         this._consumePickedSuggestion(text);
-        if (this.currentTemplate === 'Interview') {
+        if (this._copilot()) {
             (async () => {
                 try {
                     await invoke('save_interview_message', {
@@ -382,7 +416,7 @@ export const interviewPanelMethods = {
 
 
     _scheduleInterviewIngest() {
-        if (this.currentTemplate !== 'Interview') return;
+        if (!this._copilot()) return;
         if (!this._interviewCvFile && !this._interviewJdFile) return;
         clearTimeout(this._ingestInterviewDebounce);
         this._ingestInterviewDebounce = setTimeout(() => void this._ingestInterviewFilesNow(), 500);
@@ -410,7 +444,8 @@ export const interviewPanelMethods = {
         showProgress(0, 'Preparing…');
         const unlisten = await listen('ingest:progress', (e) => {
             const { stage, current, total, docType } = e.payload;
-            const prefix = docType === 'cv' ? 'CV' : 'JD';
+            const preset = this._copilot();
+            const prefix = preset?.docTypes[0] === docType ? preset.uploads.a : (preset?.uploads.b || docType);
             let pct = 5;
             if (stage === 'embedding') pct = total > 0 ? 10 + Math.round((current / total) * 70) : 10;
             else if (stage === 'upserting') pct = 85;
@@ -457,7 +492,7 @@ export const interviewPanelMethods = {
         this._lastInterviewSuggestArgs = { transcriptContext: t, userDraft: null };
         this._brainstormPending = true;
         this._injectBrainstormButton();
-        if (this.currentTemplate === 'Interview') {
+        if (this._copilot()) {
             (async () => {
                 try {
                     await invoke('save_interview_message', {

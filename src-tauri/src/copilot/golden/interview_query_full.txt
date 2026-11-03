@@ -1,0 +1,5 @@
+Latest interviewer / dialogue line:
+Tell me about a hard bug
+
+Candidate draft or notes:
+deadlock story
