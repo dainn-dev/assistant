@@ -751,8 +751,8 @@ export const interviewPanelMethods = {
             // If we didn't get a speaker/draft marker for some reason, start timing here.
             if (!this._interviewSuggestPerf.t0) this._markInterviewSuggestStart(null);
             this._llmCalls = (this._llmCalls || 0) + 1;
-            // Local lexical excerpts first — skips the embed+Pinecone chain.
-            // Empty result → backend falls back to Pinecone if configured.
+            // Local lexical excerpts first — skips the embedding call.
+            // Empty result → backend falls back to on-device semantic search.
             let contextSnippets = [];
             try {
                 const excerpts = await invoke('select_context_excerpts', {
@@ -761,7 +761,7 @@ export const interviewPanelMethods = {
                     maxChars: 3000,
                 });
                 contextSnippets = (excerpts || []).map((e) => `[${e.docType}] ${e.text}`);
-            } catch { /* excerpt lookup is best-effort; Pinecone fallback covers it */ }
+            } catch { /* excerpt lookup is best-effort; semantic fallback covers it */ }
             const res = await invoke('suggest_interview_answers', {
                 req: {
                     userId: this._getInterviewUserId(),

@@ -2,13 +2,13 @@ use crate::db::{self, InterviewDb};
 use crate::secrets::{self, SecretSlot};
 use crate::services::embeddings;
 use crate::services::llm;
-use crate::services::pinecone::{pinecone_vector_from_parts, query_top_k, upsert_vectors};
+use crate::services::vector_search;
 use crate::settings::SettingsState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{ipc::Channel, AppHandle, Emitter, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 const INGEST_CHUNK_MAX_CHARS: usize = 1200;
@@ -60,9 +60,8 @@ impl InterviewFilePart {
     }
 }
 
-/// Pinecone namespaces derive from `user_id` — keep it a sane identifier
-/// (non-empty, bounded, no control/whitespace chars that could break URLs
-/// or collide across users).
+/// Stored rows are scoped by `user_id` — keep it a sane identifier
+/// (non-empty, bounded, no control chars that could collide across users).
 fn sanitize_user_id(user_id: &str) -> Result<String, String> {
     let trimmed = user_id.trim();
     if trimmed.is_empty() {
@@ -115,7 +114,7 @@ pub struct SuggestInterviewAnswersRequest {
     #[serde(default)]
     pub debug: Option<bool>,
     /// Pre-selected CV/JD excerpts (from `select_context_excerpts`) — the
-    /// early path skips embedding+Pinecone and grounds on these directly.
+    /// early path skips embedding + semantic search and grounds on these directly.
     #[serde(default)]
     pub context_snippets: Option<Vec<String>>,
 }
@@ -306,6 +305,20 @@ fn chunk_text_with_overlap(text: &str, max_chars: usize, overlap: usize) -> Vec<
     out
 }
 
+/// Run blocking work (reqwest::blocking, SQLite, file parsing) on the blocking
+/// pool. Sync `#[tauri::command]`s execute on the main thread and freeze the
+/// window for the whole network round-trip; `#[command(async)]` is not enough
+/// either — reqwest::blocking panics on a tokio worker thread.
+pub(crate) async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
+}
+
 pub(crate) fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -457,10 +470,10 @@ fn emit_progress(app: &AppHandle, doc_type: &str, stage: &str, current: usize, t
 /// Shared dependencies for document ingestion — bundling keeps
 /// `ingest_one_doc` readable and under the clippy arg limit.
 struct IngestCtx<'a> {
-    conn: &'a rusqlite::Connection,
+    /// Locked only around DB writes — never across embedding calls, or
+    /// early-hint excerpt selection stalls for the whole ingest.
+    db: &'a InterviewDb,
     client: &'a reqwest::blocking::Client,
-    pinecone_host: &'a str,
-    pine_key: &'a str,
     embeddings_url: &'a str,
     embeddings_key: &'a str,
     user_id: &'a str,
@@ -471,20 +484,22 @@ fn ingest_one_doc(
     ctx: &IngestCtx<'_>,
     doc_type: &str,
     part: InterviewFilePart,
-    expected_dim: usize,
 ) -> Result<(String, usize), String> {
     emit_progress(app, doc_type, "extracting", 0, 1);
     let text = extract_file_text(&part.filename, &part.bytes)?;
     let doc_id = Uuid::new_v4().to_string();
-    db::upsert_document(
-        ctx.conn,
-        &doc_id,
-        ctx.user_id,
-        doc_type,
-        &part.filename,
-        Some(&part.bytes),
-        &text,
-    )?;
+    {
+        let conn = ctx.db.0.lock().map_err(|e| e.to_string())?;
+        db::upsert_document(
+            &conn,
+            &doc_id,
+            ctx.user_id,
+            doc_type,
+            &part.filename,
+            Some(&part.bytes),
+            &text,
+        )?;
+    }
 
     fn normalize_whitespace_key(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
@@ -499,7 +514,7 @@ fn ingest_one_doc(
 
     let chunks = chunk_text_with_overlap(&text, INGEST_CHUNK_MAX_CHARS, INGEST_CHUNK_OVERLAP_CHARS);
 
-    // Dedupe chunks BEFORE embedding and Pinecone upsert to avoid storing duplicates.
+    // Dedupe chunks BEFORE embedding to avoid storing duplicates.
     // Key: trim + normalize whitespace only (no lowercasing) to avoid accidental semantic merges.
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut unique_chunks: Vec<(usize, String)> = Vec::new(); // (original index, chunk text)
@@ -514,7 +529,7 @@ fn ingest_one_doc(
 
     let total_chunks = unique_chunks.len();
     emit_progress(app, doc_type, "embedding", 0, total_chunks);
-    let mut all_vectors = Vec::with_capacity(total_chunks);
+    let mut embedded: Vec<(String, Vec<f32>)> = Vec::with_capacity(total_chunks);
     let max = embeddings::OPENAI_EMBEDDINGS_MAX_INPUTS;
     for batch_start in (0..unique_chunks.len()).step_by(max) {
         let batch_end = (batch_start + max).min(unique_chunks.len());
@@ -522,19 +537,14 @@ fn ingest_one_doc(
             .iter()
             .map(|(_, ch)| ch.clone())
             .collect();
-        let (vecs, dim) = embeddings::embed_batch_prefer_openai(
+        let (vecs, _dim) = embeddings::embed_batch_prefer_openai(
             ctx.client,
             ctx.embeddings_url,
             ctx.embeddings_key,
             &batch,
-            Some(expected_dim),
+            None,
         )?;
         emit_progress(app, doc_type, "embedding", batch_end, total_chunks);
-        if dim != expected_dim {
-            return Err(format!(
-                "Embedding dimension is {dim} but Settings expects {expected_dim}. Set pinecone_vector_dimension to {dim} or use matching embeddings (1536 OpenAI / 768 Gemini)."
-            ));
-        }
         if vecs.len() != batch.len() {
             return Err(format!(
                 "Batch embedding returned {} vectors for {} chunks — API response mismatch.",
@@ -542,39 +552,34 @@ fn ingest_one_doc(
                 batch.len()
             ));
         }
-        for (j, v) in vecs.into_iter().enumerate() {
-            let idx = batch_start + j;
-            let (orig_i, ch) = &unique_chunks[idx];
-            let ref_id = format!("{doc_id}#{orig_i}");
-            let pid = format!("{}_{doc_id}_{orig_i}", ctx.user_id);
-            all_vectors.push(pinecone_vector_from_parts(
-                pid,
-                v,
-                ctx.user_id,
-                "doc_chunk",
-                &ref_id,
-                Some(doc_type),
-                ch,
-            ));
-        }
+        embedded.extend(batch.into_iter().zip(vecs));
     }
     emit_progress(app, doc_type, "upserting", 0, 1);
-    upsert_vectors(
-        ctx.client,
-        ctx.pinecone_host,
-        ctx.pine_key,
-        Some(ctx.user_id),
-        all_vectors,
-    )?;
+    {
+        let conn = ctx.db.0.lock().map_err(|e| e.to_string())?;
+        db::insert_doc_chunks(&conn, &doc_id, ctx.user_id, doc_type, &embedded)?;
+    }
     emit_progress(app, doc_type, "done", total_chunks, total_chunks);
     Ok((doc_id, total_chunks))
 }
 
 #[tauri::command]
-pub fn ingest_interview_files(
+pub async fn ingest_interview_files(
     app: AppHandle,
-    db: State<'_, InterviewDb>,
-    settings: State<'_, SettingsState>,
+    req: IngestInterviewFilesRequest,
+) -> Result<IngestInterviewFilesResponse, String> {
+    run_blocking(move || {
+        let db = app.state::<InterviewDb>();
+        let settings = app.state::<SettingsState>();
+        ingest_interview_files_blocking(&app, &db, &settings, req)
+    })
+    .await
+}
+
+fn ingest_interview_files_blocking(
+    app: &AppHandle,
+    db: &InterviewDb,
+    settings: &SettingsState,
     mut req: IngestInterviewFilesRequest,
 ) -> Result<IngestInterviewFilesResponse, String> {
     if req.cv.is_none() && req.jd.is_none() {
@@ -582,28 +587,18 @@ pub fn ingest_interview_files(
     }
     req.user_id = sanitize_user_id(&req.user_id)?;
 
-    let (pinecone_host, expected_dim, llm_url) = {
-        let g = settings.0.lock().map_err(|e| e.to_string())?;
-        (
-            g.pinecone_host.clone(),
-            g.pinecone_vector_dimension as usize,
-            g.llm_url.clone(),
-        )
-    };
-    let pine_key = secrets::get_secret(SecretSlot::Pinecone)?.unwrap_or_default();
+    let llm_url = settings
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .llm_url
+        .clone();
     let llm_api_key = secrets::get_secret(SecretSlot::Llm)?.unwrap_or_default();
-    if pinecone_host.trim().is_empty() {
-        return Err("Pinecone host is empty — fill it in Settings → AI.".to_string());
-    }
-    if pine_key.trim().is_empty() {
-        return Err("Pinecone API key not set — add it in Settings → AI.".to_string());
-    }
     if llm_api_key.trim().is_empty() {
         return Err("LLM API key not set — add it in Settings → AI.".to_string());
     }
     let embeddings_url = embeddings::embeddings_url_from_llm_url(&llm_url);
 
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
     let client = http_client()?;
 
     let mut cv_doc = None;
@@ -612,10 +607,8 @@ pub fn ingest_interview_files(
     let mut jd_chunks = 0usize;
 
     let ctx = IngestCtx {
-        conn: &conn,
+        db,
         client: &client,
-        pinecone_host: &pinecone_host,
-        pine_key: &pine_key,
         embeddings_url: &embeddings_url,
         embeddings_key: &llm_api_key,
         user_id: &req.user_id,
@@ -623,13 +616,13 @@ pub fn ingest_interview_files(
 
     if let Some(cv) = req.cv.take() {
         let cv = cv.resolve()?;
-        let (id, n) = ingest_one_doc(&app, &ctx, "cv", cv, expected_dim)?;
+        let (id, n) = ingest_one_doc(app, &ctx, "cv", cv)?;
         cv_doc = Some(id);
         cv_chunks = n;
     }
     if let Some(jd) = req.jd.take() {
         let jd = jd.resolve()?;
-        let (id, n) = ingest_one_doc(&app, &ctx, "jd", jd, expected_dim)?;
+        let (id, n) = ingest_one_doc(app, &ctx, "jd", jd)?;
         jd_doc = Some(id);
         jd_chunks = n;
     }
@@ -655,24 +648,26 @@ pub fn save_interview_message(
 }
 
 #[tauri::command]
-pub fn suggest_interview_answers(
-    db: State<'_, InterviewDb>,
-    settings: State<'_, SettingsState>,
+pub async fn suggest_interview_answers(
+    app: AppHandle,
     req: SuggestInterviewAnswersRequest,
 ) -> Result<SuggestInterviewAnswersResponse, String> {
-    let (
-        pinecone_host,
-        expected_dim,
-        llm_url,
-        llm_model,
-        source_language,
-        target_language,
-        suggestion_type,
-    ) = {
+    run_blocking(move || {
+        let db = app.state::<InterviewDb>();
+        let settings = app.state::<SettingsState>();
+        suggest_interview_answers_blocking(&db, &settings, req)
+    })
+    .await
+}
+
+fn suggest_interview_answers_blocking(
+    db: &InterviewDb,
+    settings: &SettingsState,
+    req: SuggestInterviewAnswersRequest,
+) -> Result<SuggestInterviewAnswersResponse, String> {
+    let (llm_url, llm_model, source_language, target_language, suggestion_type) = {
         let g = settings.0.lock().map_err(|e| e.to_string())?;
         (
-            g.pinecone_host.clone(),
-            g.pinecone_vector_dimension as usize,
             g.llm_url.clone(),
             g.llm_model.clone(),
             g.source_language.clone(),
@@ -681,7 +676,6 @@ pub fn suggest_interview_answers(
         )
     };
     let llm_key = secrets::get_secret(SecretSlot::Llm)?.unwrap_or_default();
-    let pine_key = secrets::get_secret(SecretSlot::Pinecone)?.unwrap_or_default();
     if llm_url.trim().is_empty() {
         return Err("LLM URL not configured — fill it in Settings → AI.".to_string());
     }
@@ -693,9 +687,9 @@ pub fn suggest_interview_answers(
     }
 
     // ── Interview path ────────────────────────────────────────────────────────
-    // Fast path: pre-selected local excerpts (select_context_excerpts) mean no
-    // embedding call and no Pinecone round-trip — and no Pinecone key needed.
-    // Pinecone remains the fallback only when no snippets were provided.
+    // Fast path: pre-selected lexical excerpts (select_context_excerpts) mean
+    // no embedding call. On-device semantic search over the stored chunk
+    // vectors is the fallback only when no snippets were provided.
     let local_snips: Vec<String> = req
         .context_snippets
         .clone()
@@ -704,8 +698,6 @@ pub fn suggest_interview_answers(
         .filter(|s| !s.trim().is_empty())
         .collect();
     let use_local_excerpts = !local_snips.is_empty();
-
-    require_context_source(!use_local_excerpts, &pine_key)?;
 
     let db_path = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
@@ -755,45 +747,8 @@ pub fn suggest_interview_answers(
     let context_snips: Vec<String> = if use_local_excerpts {
         local_snips
     } else {
-        if pinecone_host.trim().is_empty() {
-            return Err("Pinecone host not configured.".to_string());
-        }
-
         let emb_url = embeddings::embeddings_url_from_llm_url(&llm_url);
-        let (query_vec, qdim) = embeddings::embed_batch_prefer_openai(
-            &client,
-            &emb_url,
-            &llm_key,
-            std::slice::from_ref(&query_text),
-            Some(expected_dim),
-        )?;
-        if qdim != expected_dim {
-            return Err(format!(
-                "Embedding dimension mismatch: got {qdim}, settings {expected_dim}."
-            ));
-        }
-        let qv = query_vec.into_iter().next().ok_or("no query vector")?;
-
-        let matches = query_top_k(
-            &client,
-            &pinecone_host,
-            &pine_key,
-            Some(&req.user_id),
-            qv,
-            4,
-        )?;
-
-        let mut snips: Vec<String> = Vec::new();
-        for m in &matches {
-            if let Some(meta) = &m.metadata {
-                if let Some(serde_json::Value::String(s)) = meta.get("content") {
-                    if !s.trim().is_empty() {
-                        snips.push(s.clone());
-                    }
-                }
-            }
-        }
-        snips
+        semantic_excerpts(db, &client, &emb_url, &llm_key, &req.user_id, &query_text)?
     };
 
     let mut recent_lines = String::new();
@@ -857,7 +812,7 @@ Interviewer's question / task focus:\n\
             if use_local_excerpts {
                 "local"
             } else {
-                "pinecone"
+                "semantic"
             },
             context_snips.len(),
             llm_model,
@@ -870,12 +825,48 @@ Interviewer's question / task focus:\n\
     Ok(SuggestInterviewAnswersResponse { suggestions, debug })
 }
 
-/// Pinecone is only required when the request carries no local excerpts.
-fn require_context_source(needs_pinecone: bool, pine_key: &str) -> Result<(), String> {
-    if needs_pinecone && pine_key.trim().is_empty() {
-        return Err("Pinecone API key not set — add it in Settings → AI.".to_string());
+const SEMANTIC_EXCERPTS_K: usize = 4;
+
+/// Non-empty chunk contents most similar to `query_vec`, labelled `[CV]` /
+/// `[JD]` like the lexical excerpts so the prompt keeps the doc boundary.
+fn rank_chunk_excerpts(query_vec: &[f32], chunks: Vec<db::DocChunk>, k: usize) -> Vec<String> {
+    let items = chunks
+        .into_iter()
+        .filter(|c| !c.content.trim().is_empty())
+        .map(|c| ((c.doc_type, c.content), c.embedding))
+        .collect();
+    vector_search::top_k_cosine(query_vec, items, k)
+        .into_iter()
+        .map(|(doc_type, content)| format!("[{}] {content}", doc_type.to_uppercase()))
+        .collect()
+}
+
+/// On-device semantic search over the user's stored chunk vectors. Skips the
+/// embedding call entirely when nothing has been ingested yet.
+fn semantic_excerpts(
+    db: &InterviewDb,
+    client: &reqwest::blocking::Client,
+    embeddings_url: &str,
+    embeddings_key: &str,
+    user_id: &str,
+    query: &str,
+) -> Result<Vec<String>, String> {
+    let chunks = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        db::list_doc_chunks(&conn, user_id)?
+    };
+    if chunks.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    let (vecs, _dim) = embeddings::embed_batch_prefer_openai(
+        client,
+        embeddings_url,
+        embeddings_key,
+        &[query.to_string()],
+        None,
+    )?;
+    let query_vec = vecs.into_iter().next().ok_or("no query vector")?;
+    Ok(rank_chunk_excerpts(&query_vec, chunks, SEMANTIC_EXCERPTS_K))
 }
 
 /// Lexical relevance score: normalized token-overlap count between the query
@@ -1007,7 +998,7 @@ pub fn cancel_suggestion_stream(request_id: u32, streams: State<'_, SuggestStrea
 }
 
 /// Early-hint path: stream 2–3 plain-text talking points while the
-/// interviewer is still speaking. Skips embedding + Pinecone — the frontend
+/// interviewer is still speaking. Skips embedding + semantic search — the frontend
 /// passes pre-selected excerpts via `req.context_snippets`.
 #[tauri::command]
 pub async fn suggest_interview_answers_stream(
@@ -1230,18 +1221,38 @@ mod tests {
         assert_eq!(items[0].target, "");
     }
 
-    #[test]
-    fn pinecone_key_not_required_when_local_excerpts_present() {
-        // needs_pinecone=false → any key state is fine
-        assert!(require_context_source(false, "").is_ok());
-        assert!(require_context_source(false, "pc-key").is_ok());
+    fn doc_chunk(doc_type: &str, content: &str, v: &[f32]) -> db::DocChunk {
+        db::DocChunk {
+            doc_type: doc_type.into(),
+            content: content.into(),
+            embedding: v.to_vec(),
+        }
     }
 
     #[test]
-    fn pinecone_key_required_only_for_fallback_path() {
-        assert!(require_context_source(true, "").is_err());
-        assert!(require_context_source(true, "   ").is_err());
-        assert!(require_context_source(true, "pc-key").is_ok());
+    fn rank_chunk_excerpts_labels_by_doc_type_best_first() {
+        let chunks = vec![
+            doc_chunk("jd", "needs Kafka", &[0.0, 1.0]),
+            doc_chunk("cv", "built Kafka pipeline", &[1.0, 0.1]),
+            doc_chunk("cv", "   ", &[1.0, 0.0]),
+        ];
+        let out = rank_chunk_excerpts(&[1.0, 0.0], chunks, 4);
+        assert_eq!(
+            out,
+            vec![
+                "[CV] built Kafka pipeline".to_string(),
+                "[JD] needs Kafka".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rank_chunk_excerpts_respects_k() {
+        let chunks = vec![
+            doc_chunk("cv", "a", &[1.0, 0.0]),
+            doc_chunk("cv", "b", &[0.9, 0.1]),
+        ];
+        assert_eq!(rank_chunk_excerpts(&[1.0, 0.0], chunks, 1), vec!["[CV] a"]);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // Extracted from app.js — methods are merged onto App.prototype via Object.assign.
 
 import { settingsManager } from './settings.js';
-import { sonioxClient, sonioxMicClient } from './soniox.js';
+import { sttProvider } from './stt-providers.js';
 import { elevenLabsTTS } from './elevenlabs-tts.js';
 import { edgeTTSRust } from './edge-tts.js';
 import { audioPlayer } from './audio-player.js';
@@ -161,19 +161,17 @@ export const sessionMethods = {
 
 
     _updateModeUI(mode) {
-        const isSoniox = mode === 'soniox';
-
-        // Toggle hints
-        const hintSoniox = document.getElementById('hint-mode-soniox');
-        const hintLocal = document.getElementById('hint-mode-local');
-        if (hintSoniox) hintSoniox.style.display = isSoniox ? '' : 'none';
-        if (hintLocal) hintLocal.style.display = !isSoniox ? '' : 'none';
-
-        // Toggle Soniox-only sections
-        const sectionApiKey = document.getElementById('section-api-key');
-        const sectionContext = document.getElementById('section-soniox-context');
-        if (sectionApiKey) sectionApiKey.style.display = isSoniox ? '' : 'none';
-        if (sectionContext) sectionContext.style.display = isSoniox ? '' : 'none';
+        const show = (id, visible) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = visible ? '' : 'none';
+        };
+        show('hint-mode-soniox', mode === 'soniox');
+        show('hint-mode-deepgram', mode === 'deepgram');
+        show('hint-mode-local', mode === 'local');
+        show('section-api-key', mode === 'soniox');
+        show('section-deepgram', mode === 'deepgram');
+        // Context terms feed Soniox and the Deepgram translation prompt.
+        show('section-soniox-context', mode !== 'local');
     }
 ,
 
@@ -185,9 +183,13 @@ export const sessionMethods = {
         this.translationMode = settings.translation_mode || 'soniox';
         // Never log the settings object — it contains API keys.
 
-        // Check Soniox API key only for cloud mode
-        if (this.translationMode === 'soniox' && !settings.soniox_api_key) {
-            this._showToast('Soniox API key is required. Add it in Settings.', 'error');
+        // Cloud providers validate their own config; local mode needs none.
+        if (this.translationMode !== 'local' && !sttProvider(this.translationMode)) {
+            this.translationMode = 'soniox';
+        }
+        const missingConfig = sttProvider(this.translationMode)?.missingConfig(settings);
+        if (missingConfig) {
+            this._showToast(missingConfig, 'error');
             this._showView('settings');
             return;
         }
@@ -241,6 +243,13 @@ export const sessionMethods = {
                 this.sessionTargetLang = settings.target_language || 'vi';
             }
         }
+        this.transcriptUI?.configure({
+            languages: {
+                mode: this.sessionMode,
+                sourceLang: this.sessionSourceLang,
+                targetLang: this.sessionTargetLang,
+            },
+        });
 
         // Clear transcript only if nothing is showing
         if (!this.transcriptUI.hasContent()) {
@@ -252,7 +261,7 @@ export const sessionMethods = {
         if (this.translationMode === 'local') {
             await this._startLocalMode(settings);
         } else {
-            await this._startSonioxMode(settings);
+            await this._startCloudMode(settings);
         }
 
         // Early-suggestion scheduler polls the system-source transcript
@@ -270,29 +279,21 @@ export const sessionMethods = {
 ,
 
 
-    async _startSonioxMode(settings) {
-        // Connect to Soniox
-        console.log('[App] Connecting to Soniox...');
+    async _startCloudMode(settings) {
+        const provider = sttProvider(this.translationMode);
+        this._activeStt = provider.clients;
+        const { system, mic } = this._activeStt;
+        console.log(`[App] Connecting to ${provider.label}...`);
         this._updateStatus('connecting');
-        const sonioxConfig = {
-            apiKey: settings.soniox_api_key,
-            sourceLanguage: settings.source_language,
-            targetLanguage: settings.target_language,
-            customContext: settings.custom_context,
-            translationType: settings.translation_type || 'one_way',
-            languageA: settings.language_a,
-            languageB: settings.language_b,
-            languageHintsStrict: settings.language_hints_strict || false,
-            endpointDelay: settings.endpoint_delay || 3000,
-        };
-        sonioxClient.connect(sonioxConfig);
+        const sttConfig = provider.buildConfig(settings);
+        system.connect(sttConfig);
 
         // Split mode: Interview + System&Mic keeps the two audio
         // sources on independent recognition streams so the app always knows
         // who is speaking (system = interviewer, mic = candidate).
         const useSplit = this.currentSource === 'both' && this._isSuggestionsMode();
         if (useSplit) {
-            sonioxMicClient.connect(sonioxConfig);
+            mic.connect(sttConfig);
         }
 
         // If system audio is selected, request MediaProjection first (no-op on desktop).
@@ -312,10 +313,10 @@ export const sessionMethods = {
                     if (audioChunkCount <= 3 || audioChunkCount % 50 === 0) {
                         console.log(`[Audio] Batch #${audioChunkCount}, size:`, pcmData?.length || 0);
                     }
-                    // Forward batched audio to Soniox
+                    // Forward batched audio to the STT provider
                     const bytes = new Uint8Array(pcmData);
                     if (this._sonioxSec) this._sonioxSec.system += bytes.length / 32000;
-                    sonioxClient.sendAudio(bytes.buffer);
+                    system.sendAudio(bytes.buffer);
                 };
 
                 console.log('[App] Starting audio capture, source:', this.currentSource);
@@ -334,23 +335,24 @@ export const sessionMethods = {
 ,
 
 
-    // Split capture: two Rust IPC channels → two Soniox clients. System audio
-    // → sonioxClient (primary), mic → sonioxMicClient. If the mic side fails
-    // after system is running, we keep going on system-only with a visible
-    // warning rather than tearing down the whole session.
+    // Split capture: two Rust IPC channels → the active provider's two
+    // clients. System audio → system client (primary), mic → mic client. If
+    // the mic side fails after system is running, we keep going on
+    // system-only with a visible warning rather than tearing down the session.
     async _startSplitCapture() {
+        const { system, mic } = this._activeStt;
         const systemChannel = new Channel();
         systemChannel.onmessage = (pcmData) => {
             const bytes = new Uint8Array(pcmData);
             if (this._sonioxSec) this._sonioxSec.system += bytes.length / 32000;
-            sonioxClient.sendAudio(bytes.buffer);
+            system.sendAudio(bytes.buffer);
         };
 
         const micChannel = new Channel();
         micChannel.onmessage = (pcmData) => {
             const bytes = new Uint8Array(pcmData);
             if (this._sonioxSec) this._sonioxSec.mic += bytes.length / 32000;
-            sonioxMicClient.sendAudio(bytes.buffer);
+            mic.sendAudio(bytes.buffer);
         };
 
         try {
@@ -365,7 +367,7 @@ export const sessionMethods = {
             // the mic, degrade to system-only so the interviewer side still works.
             if (typeof err === 'string' && err.startsWith('microphone')) {
                 console.warn('[App] Mic capture failed, falling back to system-only:', err);
-                sonioxMicClient.disconnect();
+                mic.disconnect();
                 this._micDegraded = true;
                 try {
                     await invoke('start_capture', { source: 'system', channel: systemChannel });
@@ -679,8 +681,8 @@ export const sessionMethods = {
             this.transcriptUI.removeStatusMessage();
             this._updateStatus('disconnected');
         } else {
-            sonioxClient.disconnect();
-            sonioxMicClient.disconnect();
+            this._activeStt?.system.disconnect();
+            this._activeStt?.mic.disconnect();
             this._micDegraded = false;
         }
 
@@ -867,7 +869,7 @@ export const sessionMethods = {
         const mode = this.sessionMode || 'one_way';
 
         const content = this.transcriptUI.getFullSessionText({
-            model: this.translationMode === 'soniox' ? 'Soniox Cloud API' : 'Local MLX Whisper',
+            model: sttProvider(this.translationMode)?.label || 'Local MLX Whisper',
             sourceLang,
             targetLang,
             duration,

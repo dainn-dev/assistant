@@ -14,7 +14,6 @@ pub struct ProviderKeyFlags {
     pub elevenlabs: bool,
     pub google: bool,
     pub llm: bool,
-    pub pinecone: bool,
 }
 
 #[tauri::command]
@@ -47,6 +46,5 @@ pub fn interview_key_status() -> ProviderKeyFlags {
         elevenlabs: has_secret(SecretSlot::ElevenLabs).unwrap_or(false),
         google: has_secret(SecretSlot::Google).unwrap_or(false),
         llm: has_secret(SecretSlot::Llm).unwrap_or(false),
-        pinecone: has_secret(SecretSlot::Pinecone).unwrap_or(false),
     }
 }

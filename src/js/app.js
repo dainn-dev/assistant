@@ -6,6 +6,7 @@
 import { settingsManager } from './settings.js';
 import { TranscriptUI } from './ui.js';
 import { sonioxClient, sonioxMicClient } from './soniox.js';
+import { deepgramClient, deepgramMicClient } from './deepgram.js';
 import { elevenLabsTTS } from './elevenlabs-tts.js';
 import { googleTTS } from './google-tts.js';
 import { edgeTTSRust } from './edge-tts.js';
@@ -28,6 +29,7 @@ import { earlySuggestionMethods } from './early-suggestions.js';
 import { toastMethods } from './toast.js';
 import { profileMethods } from './profile.js';
 import { reviewMethods } from './review.js';
+import { fileModeMethods } from './file-mode.js';
 
 class App {
     constructor() {
@@ -289,7 +291,6 @@ class App {
 
         this._initInterviewUploads();
         this._bindInterviewSettingsKeys();
-        this._bindDimChips();
 
         // Interview suggestions triggered by inline brainstorm button (see _injectBrainstormButton)
 
@@ -391,6 +392,10 @@ class App {
         });
 
         // Open saved transcripts folder (kept for Finder access)
+        document.getElementById('btn-subtitles-from-file')?.addEventListener('click', () => {
+            this._pickFileForSubtitles().catch((err) => this._showToast(String(err), 'error'));
+        });
+
         document.getElementById('btn-open-transcripts').addEventListener('click', async () => {
             try {
                 await invoke('open_transcript_dir');
@@ -433,6 +438,10 @@ class App {
         document.getElementById('link-soniox').addEventListener('click', (e) => {
             e.preventDefault();
             window.__TAURI__.opener.openUrl('https://console.soniox.com/signup/');
+        });
+        document.getElementById('link-deepgram')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            window.__TAURI__.opener.openUrl('https://console.deepgram.com/signup');
         });
 
         // ElevenLabs link
@@ -557,11 +566,13 @@ class App {
         // candidate's own speech in split-capture mode; it never triggers
         // suggestions and never drives the main status dot.
         this._sourceClients = { system: sonioxClient, mic: sonioxMicClient };
-        this._wireSonioxClient(sonioxClient, 'system');
-        this._wireSonioxClient(sonioxMicClient, 'mic');
+        this._wireSttClient(sonioxClient, 'system');
+        this._wireSttClient(sonioxMicClient, 'mic');
+        this._wireSttClient(deepgramClient, 'system');
+        this._wireSttClient(deepgramMicClient, 'mic');
     }
 
-    _wireSonioxClient(client, source) {
+    _wireSttClient(client, source) {
         const isPrimary = source === 'system';
 
         client.onOriginal = (text, speaker, language) => {
@@ -650,7 +661,7 @@ class App {
 }
 
 // Methods split into sibling modules are merged onto the prototype here.
-Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods, toastMethods, profileMethods, reviewMethods);
+Object.assign(App.prototype, settingsFormMethods, ttsMethods, sessionMethods, conversationMethods, windowMethods, updaterMethods, shortcutMethods, interviewPanelMethods, earlySuggestionMethods, toastMethods, profileMethods, reviewMethods, fileModeMethods);
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {

@@ -1,12 +1,12 @@
 //! Candidate profile CRUD — persistent summary / STAR stories / strengths that
 //! join CV/JD excerpts in grounding interview suggestions.
 
-use crate::commands::interview::extract_json_array_slice;
+use crate::commands::interview::{extract_json_array_slice, run_blocking};
 use crate::db::{self, InterviewDb, ProfileItem};
 use crate::secrets::{self, SecretSlot};
 use crate::services::llm;
 use crate::settings::SettingsState;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub fn list_profile(
@@ -92,9 +92,21 @@ fn parse_profile_draft(raw: &str, user_id: &str, now: &str) -> Result<Vec<Profil
 /// One LLM call: turn the uploaded CV (+ JD if present) into a profile draft —
 /// a summary, STAR stories, and strengths the user reviews before saving.
 #[tauri::command]
-pub fn draft_profile_from_documents(
-    db: State<'_, InterviewDb>,
-    settings: State<'_, SettingsState>,
+pub async fn draft_profile_from_documents(
+    app: AppHandle,
+    user_id: String,
+) -> Result<Vec<ProfileItem>, String> {
+    run_blocking(move || {
+        let db = app.state::<InterviewDb>();
+        let settings = app.state::<SettingsState>();
+        draft_profile_blocking(&db, &settings, user_id)
+    })
+    .await
+}
+
+fn draft_profile_blocking(
+    db: &InterviewDb,
+    settings: &SettingsState,
     user_id: String,
 ) -> Result<Vec<ProfileItem>, String> {
     let (llm_url, llm_model) = {
@@ -106,8 +118,11 @@ pub fn draft_profile_from_documents(
         return Err("Configure the LLM in Settings → AI first.".to_string());
     }
 
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let docs = db::get_documents(&conn, &user_id)?;
+    // Scoped: the lock must be released before the LLM call below.
+    let docs = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        db::get_documents(&conn, &user_id)?
+    };
     let mut cv = String::new();
     let mut jd = String::new();
     for (doc_type, text) in docs {

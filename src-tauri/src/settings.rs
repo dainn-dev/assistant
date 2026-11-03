@@ -35,6 +35,10 @@ where
 pub struct Settings {
     /// Soniox API key
     pub soniox_api_key: String,
+    /// Deepgram API key (translation_mode "deepgram"; translation via the LLM)
+    pub deepgram_api_key: String,
+    /// Deepgram streaming model, e.g. "nova-3"
+    pub deepgram_model: String,
     /// Source language: "auto" or ISO 639-1 code
     pub source_language: String,
     /// Target language: ISO 639-1 code
@@ -91,18 +95,12 @@ pub struct Settings {
     pub google_tts_speed: f64,
 
     // ─── Interview RAG ───
-    /// Pinecone index host
-    pub pinecone_host: String,
-    /// Expected vector dimension for the Pinecone index
-    pub pinecone_vector_dimension: u32,
     /// LLM chat completions endpoint (OpenAI-compatible)
     pub llm_url: String,
     /// LLM model name
     pub llm_model: String,
     /// LLM API key
     pub llm_api_key: String,
-    /// Pinecone API key
-    pub pinecone_api_key: String,
     /// Interview suggestions language mode: "target" (source_language), "translation", "both"
     pub suggestion_type: String,
     /// App mode: "Interview" | "" (none)
@@ -128,6 +126,8 @@ impl Default for Settings {
             max_lines: 5,
             show_original: true,
             translation_mode: "soniox".to_string(),
+            deepgram_api_key: String::new(),
+            deepgram_model: "nova-3".to_string(),
             translation_type: "one_way".to_string(),
             language_a: "ja".to_string(),
             language_b: "vi".to_string(),
@@ -145,12 +145,9 @@ impl Default for Settings {
             google_tts_api_key: String::new(),
             google_tts_voice: "vi-VN-Chirp3-HD-Aoede".to_string(),
             google_tts_speed: 1.0,
-            pinecone_host: String::new(),
-            pinecone_vector_dimension: 1536,
             llm_url: String::new(),
             llm_model: String::new(),
             llm_api_key: String::new(),
-            pinecone_api_key: String::new(),
             suggestion_type: "translation".to_string(),
             app_mode: String::new(),
             early_suggestions: false,
@@ -172,10 +169,10 @@ impl Settings {
     fn secret_fields_mut(&mut self) -> [(SecretSlot, &mut String); 5] {
         [
             (SecretSlot::Soniox, &mut self.soniox_api_key),
+            (SecretSlot::Deepgram, &mut self.deepgram_api_key),
             (SecretSlot::ElevenLabs, &mut self.elevenlabs_api_key),
             (SecretSlot::Google, &mut self.google_tts_api_key),
             (SecretSlot::Llm, &mut self.llm_api_key),
-            (SecretSlot::Pinecone, &mut self.pinecone_api_key),
         ]
     }
 
@@ -308,12 +305,9 @@ mod tests {
             "google_tts_api_key": "g-key",
             "google_tts_voice": "vi-VN-Chirp3-HD-Aoede",
             "google_tts_speed": 1.1,
-            "pinecone_host": "https://idx.pinecone.io",
-            "pinecone_vector_dimension": 1536,
             "llm_url": "https://api.openai.com/v1/chat/completions",
             "llm_model": "gpt-4o-mini",
             "llm_api_key": "llm-key",
-            "pinecone_api_key": "pc-key",
             "suggestion_type": "both",
             "app_mode": "Interview",
             "early_suggestions": true
@@ -327,10 +321,21 @@ mod tests {
         assert_eq!(s.endpoint_delay, 1500);
         assert_eq!(s.soniox_api_key, "sk-soniox");
         assert_eq!(s.llm_api_key, "llm-key");
-        assert_eq!(s.pinecone_api_key, "pc-key");
         assert_eq!(s.app_mode, "Interview");
         assert_eq!(s.suggestion_type, "both");
         assert!(s.early_suggestions);
+    }
+
+    /// settings.json written before Pinecone was removed must still load.
+    #[test]
+    fn legacy_pinecone_fields_are_ignored_on_load() {
+        let json = r#"{
+            "pinecone_host": "https://idx.pinecone.io",
+            "pinecone_vector_dimension": 1536,
+            "llm_model": "gpt-4o-mini"
+        }"#;
+        let s: Settings = serde_json::from_str(json).expect("legacy settings must load");
+        assert_eq!(s.llm_model, "gpt-4o-mini");
     }
 
     #[test]
@@ -354,7 +359,7 @@ mod tests {
             elevenlabs_api_key: "secret-el".into(),
             google_tts_api_key: "secret-google".into(),
             llm_api_key: "secret-llm".into(),
-            pinecone_api_key: "secret-pc".into(),
+            deepgram_api_key: "secret-dg".into(),
             ..Default::default()
         };
 
@@ -367,7 +372,7 @@ mod tests {
             "secret-el",
             "secret-google",
             "secret-llm",
-            "secret-pc",
+            "secret-dg",
         ] {
             assert!(!json.contains(key), "persisted JSON leaked {key}");
         }

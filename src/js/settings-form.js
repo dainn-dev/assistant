@@ -4,25 +4,12 @@
 import { settingsManager } from './settings.js';
 import { audioPlayer } from './audio-player.js';
 import { updater } from './updater.js';
+import { LANG_NAMES } from './languages.js';
 
 import { invoke } from './ipc.js';
 
-// Single source for all language selects — previously ~200 lines of duplicated
-// <option> markup in index.html, and two-way A/B only offered the "Popular" subset.
-const LANG_NAMES = {
-    vi: 'Vietnamese', en: 'English', ja: 'Japanese', ko: 'Korean', zh: 'Chinese',
-    fr: 'French', de: 'German', es: 'Spanish', th: 'Thai', id: 'Indonesian',
-    af: 'Afrikaans', sq: 'Albanian', ar: 'Arabic', az: 'Azerbaijani', eu: 'Basque',
-    be: 'Belarusian', bn: 'Bengali', bs: 'Bosnian', bg: 'Bulgarian', ca: 'Catalan',
-    hr: 'Croatian', cs: 'Czech', da: 'Danish', nl: 'Dutch', et: 'Estonian',
-    fi: 'Finnish', gl: 'Galician', el: 'Greek', gu: 'Gujarati', he: 'Hebrew',
-    hi: 'Hindi', hu: 'Hungarian', it: 'Italian', kn: 'Kannada', kk: 'Kazakh',
-    lv: 'Latvian', lt: 'Lithuanian', mk: 'Macedonian', ms: 'Malay', ml: 'Malayalam',
-    mr: 'Marathi', no: 'Norwegian', fa: 'Persian', pl: 'Polish', pt: 'Portuguese',
-    pa: 'Punjabi', ro: 'Romanian', ru: 'Russian', sr: 'Serbian', sk: 'Slovak',
-    sl: 'Slovenian', sw: 'Swahili', sv: 'Swedish', tl: 'Tagalog', ta: 'Tamil',
-    te: 'Telugu', tr: 'Turkish', uk: 'Ukrainian', ur: 'Urdu', cy: 'Welsh',
-};
+// Language selects are built from LANG_NAMES (languages.js) — previously ~200
+// lines of duplicated <option> markup in index.html.
 const POPULAR_LANGS = ['en', 'ja', 'ko', 'zh', 'vi', 'fr', 'de', 'es', 'th', 'id'];
 const ALL_LANG_CODES = Object.keys(LANG_NAMES);
 
@@ -198,6 +185,8 @@ export const settingsFormMethods = {
         const s = settingsManager.get();
 
         document.getElementById('input-api-key').value = s.soniox_api_key || '';
+        document.getElementById('input-deepgram-key').value = s.deepgram_api_key || '';
+        document.getElementById('select-deepgram-model').value = s.deepgram_model || 'nova-3';
         document.getElementById('select-source-lang').value = s.source_language || 'auto';
         document.getElementById('select-target-lang').value = s.target_language || 'vi';
         document.getElementById('select-translation-mode').value = s.translation_mode || 'soniox';
@@ -295,15 +284,6 @@ export const settingsFormMethods = {
         if (googleSpeedLabel) googleSpeedLabel.textContent = googleSpeed + 'x';
 
         // Interview AI fields
-        const pineHost = document.getElementById('interview-pinecone-host');
-        if (pineHost) pineHost.value = s.pinecone_host || '';
-        const pineDim = document.getElementById('interview-pinecone-dim');
-        if (pineDim) {
-            pineDim.value = String(s.pinecone_vector_dimension ?? 1536);
-            this._updateDimChips(pineDim.value);
-        }
-        const pineKey = document.getElementById('pinecone-api-key');
-        if (pineKey) pineKey.value = s.pinecone_api_key || '';
         const llmUrl = document.getElementById('llm-url');
         if (llmUrl) llmUrl.value = s.llm_url || '';
         const llmModel = document.getElementById('llm-model');
@@ -336,6 +316,8 @@ export const settingsFormMethods = {
     async _saveSettingsFromForm() {
         const settings = {
             soniox_api_key: document.getElementById('input-api-key').value.trim(),
+            deepgram_api_key: document.getElementById('input-deepgram-key')?.value.trim() || '',
+            deepgram_model: document.getElementById('select-deepgram-model')?.value || 'nova-3',
             source_language: document.getElementById('select-source-lang').value,
             target_language: document.getElementById('select-target-lang').value,
             translation_mode: document.getElementById('select-translation-mode').value,
@@ -399,14 +381,8 @@ export const settingsFormMethods = {
         settings.google_tts_speed = parseFloat(document.getElementById('range-google-speed')?.value || 1.0);
         settings.tts_enabled = false;
 
-        settings.pinecone_host = document.getElementById('interview-pinecone-host')?.value?.trim() || '';
-        settings.pinecone_vector_dimension = parseInt(
-            document.getElementById('interview-pinecone-dim')?.value || '1536',
-            10,
-        );
         settings.llm_url = document.getElementById('llm-url')?.value?.trim() || '';
         settings.llm_model = document.getElementById('llm-model')?.value?.trim() || '';
-        settings.pinecone_api_key = document.getElementById('pinecone-api-key')?.value?.trim() || '';
         settings.llm_api_key = document.getElementById('llm-api-key')?.value?.trim() || '';
         const st = document.getElementById('select-suggestion-type')?.value || 'translation';
         settings.suggestion_type = ['target', 'translation', 'both'].includes(st) ? st : 'translation';
@@ -605,27 +581,6 @@ export const settingsFormMethods = {
     }
 ,
 
-
-    _updateDimChips(currentVal) {
-        document.querySelectorAll('.ai-dim-chip').forEach(chip => {
-            chip.classList.toggle('active', chip.dataset.dim === String(currentVal));
-        });
-    }
-,
-
-
-    _bindDimChips() {
-        const dimInput = document.getElementById('interview-pinecone-dim');
-        if (!dimInput) return;
-        document.querySelectorAll('.ai-dim-chip').forEach(chip => {
-            chip.addEventListener('click', () => {
-                dimInput.value = chip.dataset.dim;
-                this._updateDimChips(chip.dataset.dim);
-            });
-        });
-        dimInput.addEventListener('input', () => this._updateDimChips(dimInput.value));
-    }
-,
 
 
     _bindInterviewSettingsKeys() {

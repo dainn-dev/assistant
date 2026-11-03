@@ -10,6 +10,8 @@
  * - Confidence: low-confidence segments highlighted
  */
 
+import { dualPanelHeaders } from './languages.js';
+
 export class TranscriptUI {
     constructor(container) {
         this.container = container;
@@ -18,6 +20,7 @@ export class TranscriptUI {
         this.fontSize = 16;
         this.showOriginal = true; // bilingual subtitle vs translation-only
         this.viewMode = 'subtitle'; // 'single' | 'dual' | 'subtitle'
+        this.panelHeaders = dualPanelHeaders();
 
         // Segments: each has { id, original, translation, status, speaker, language, confidence, source }
         // source: 'system' (interviewer) | 'mic' (candidate) | null (legacy/chat)
@@ -51,8 +54,12 @@ export class TranscriptUI {
     /**
      * Update display settings
      */
-    configure({ maxLines, showOriginal, fontSize, fontColor, viewMode }) {
+    configure({ maxLines, showOriginal, fontSize, fontColor, viewMode, languages }) {
         if (maxLines !== undefined) this.maxChars = maxLines * 160;
+        if (languages !== undefined) {
+            this.panelHeaders = dualPanelHeaders(languages);
+            if (this.viewMode === 'dual') this._render();
+        }
         if (showOriginal !== undefined) {
             this.showOriginal = showOriginal;
             this._render();
@@ -741,11 +748,11 @@ export class TranscriptUI {
 
         this.contentEl.innerHTML = `
             <div class="panel-source">
-              <div class="panel-header">English</div>
+              <div class="panel-header">${this._esc(this.panelHeaders.source)}</div>
               <div class="panel-body">${srcHtml}</div>
             </div>
             <div class="panel-translation">
-              <div class="panel-header">Vietnamese</div>
+              <div class="panel-header">${this._esc(this.panelHeaders.target)}</div>
               <div class="panel-body">${tgtHtml}</div>
             </div>
         `;

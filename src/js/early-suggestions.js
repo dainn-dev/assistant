@@ -162,7 +162,7 @@ export const earlySuggestionMethods = {
     _earlySuggestionsEligible() {
         const s = settingsManager.get();
         return s.early_suggestions === true
-            && this.translationMode === 'soniox'
+            && this.translationMode !== 'local'
             && (this.currentSource === 'system' || this.currentSource === 'both')
             && this._isSuggestionsMode();
     }
@@ -252,7 +252,7 @@ export const earlySuggestionMethods = {
         if (holdBtn && this._earlyHold === 'none') holdBtn.style.display = '';
 
         // Pre-fetch lexical excerpts — a local sqlite read, far cheaper than
-        // the embed+Pinecone path the manual suggestion flow uses.
+        // the embedding path the manual suggestion flow falls back to.
         invoke('select_context_excerpts', {
             userId: this._getInterviewUserId(),
             query: snapshot,

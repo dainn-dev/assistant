@@ -1,14 +1,14 @@
 //! Post-session review — one LLM call over a saved interview transcript,
 //! cached next to the transcript as `<name>.review.json`.
 
-use crate::commands::interview::{extract_json_object_slice, http_client};
+use crate::commands::interview::{extract_json_object_slice, http_client, run_blocking};
 use crate::secrets::{self, SecretSlot};
 use crate::services::llm;
 use crate::settings::SettingsState;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager};
 
 const REVIEW_DIALOGUE_MAX_CHARS: usize = 16_000;
 
@@ -57,14 +57,26 @@ pub fn read_session_review(
 /// Generate a post-session review — one LLM call, cached as
 /// `<name>.review.json`. `force: true` regenerates regardless of cache.
 #[tauri::command]
-pub fn review_session(
+pub async fn review_session(
     app: AppHandle,
-    settings: State<'_, SettingsState>,
+    filename: String,
+    force: bool,
+) -> Result<SessionReview, String> {
+    run_blocking(move || {
+        let settings = app.state::<SettingsState>();
+        review_session_blocking(&app, &settings, filename, force)
+    })
+    .await
+}
+
+fn review_session_blocking(
+    app: &AppHandle,
+    settings: &SettingsState,
     filename: String,
     force: bool,
 ) -> Result<SessionReview, String> {
     valid_md_filename(&filename)?;
-    let dir = crate::commands::transcript::transcript_dir(&app)?;
+    let dir = crate::commands::transcript::transcript_dir(app)?;
 
     if !force {
         if let Some(cached) = read_review(&dir, &filename)? {

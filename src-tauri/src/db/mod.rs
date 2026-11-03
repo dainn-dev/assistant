@@ -1,3 +1,4 @@
+use crate::services::vector_search;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
@@ -62,6 +63,18 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
+
+        -- Embedded document chunks for on-device semantic search
+        -- (embedding = little-endian f32 BLOB, see services::vector_search).
+        CREATE TABLE IF NOT EXISTS doc_chunks (
+            id TEXT PRIMARY KEY,
+            doc_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            content TEXT NOT NULL,
+            embedding BLOB NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_doc_chunks_user ON doc_chunks(user_id);
 
         CREATE TABLE IF NOT EXISTS profile_items (
             id TEXT PRIMARY KEY,
@@ -147,6 +160,11 @@ pub fn upsert_document(
     )
     .map_err(|e| format!("delete old doc: {e}"))?;
     conn.execute(
+        "DELETE FROM doc_chunks WHERE user_id = ?1 AND doc_type = ?2",
+        params![user_id, doc_type],
+    )
+    .map_err(|e| format!("delete old chunks: {e}"))?;
+    conn.execute(
         "INSERT INTO documents (id, user_id, doc_type, filename, bytes, extracted_text, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![id, user_id, doc_type, filename, bytes, extracted_text, now],
@@ -166,6 +184,73 @@ pub fn get_documents(conn: &Connection, user_id: &str) -> Result<Vec<(String, St
     let mut out = Vec::new();
     for row in rows {
         out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// One embedded chunk of an ingested document.
+#[derive(Debug, Clone)]
+pub struct DocChunk {
+    pub doc_type: String,
+    pub content: String,
+    pub embedding: Vec<f32>,
+}
+
+/// Store a document's embedded chunks (content, vector) in one transaction.
+pub fn insert_doc_chunks(
+    conn: &Connection,
+    doc_id: &str,
+    user_id: &str,
+    doc_type: &str,
+    chunks: &[(String, Vec<f32>)],
+) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("begin chunks: {e}"))?;
+    for (i, (content, embedding)) in chunks.iter().enumerate() {
+        tx.execute(
+            "INSERT OR REPLACE INTO doc_chunks (id, doc_id, user_id, doc_type, content, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                format!("{doc_id}#{i}"),
+                doc_id,
+                user_id,
+                doc_type,
+                content,
+                vector_search::encode_f32(embedding)
+            ],
+        )
+        .map_err(|e| format!("insert chunk: {e}"))?;
+    }
+    tx.commit().map_err(|e| format!("commit chunks: {e}"))
+}
+
+/// All embedded chunks for a user. Rows with a malformed vector are skipped.
+pub fn list_doc_chunks(conn: &Connection, user_id: &str) -> Result<Vec<DocChunk>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT doc_type, content, embedding FROM doc_chunks WHERE user_id = ?1 ORDER BY id",
+        )
+        .map_err(|e| format!("prepare chunks: {e}"))?;
+    let rows = stmt
+        .query_map(params![user_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(|e| format!("query chunks: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (doc_type, content, blob) = row.map_err(|e| e.to_string())?;
+        if let Some(embedding) = vector_search::decode_f32(&blob) {
+            out.push(DocChunk {
+                doc_type,
+                content,
+                embedding,
+            });
+        }
     }
     Ok(out)
 }
@@ -298,6 +383,42 @@ mod tests {
         let summaries: Vec<_> = items.iter().filter(|i| i.kind == "summary").collect();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, "b");
+    }
+
+    fn chunk(content: &str, v: &[f32]) -> (String, Vec<f32>) {
+        (content.to_string(), v.to_vec())
+    }
+
+    #[test]
+    fn doc_chunks_round_trip_scoped_to_user() {
+        let c = mem();
+        upsert_document(&c, "d1", "u", "cv", "cv.pdf", None, "text").unwrap();
+        insert_doc_chunks(&c, "d1", "u", "cv", &[chunk("a", &[1.0, 2.0])]).unwrap();
+        insert_doc_chunks(&c, "d9", "other", "cv", &[chunk("x", &[3.0])]).unwrap();
+
+        let chunks = list_doc_chunks(&c, "u").unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].doc_type, "cv");
+        assert_eq!(chunks[0].content, "a");
+        assert_eq!(chunks[0].embedding, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn replacing_a_document_drops_only_its_old_chunks() {
+        let c = mem();
+        upsert_document(&c, "cv1", "u", "cv", "a.pdf", None, "t").unwrap();
+        insert_doc_chunks(&c, "cv1", "u", "cv", &[chunk("old cv", &[1.0])]).unwrap();
+        upsert_document(&c, "jd1", "u", "jd", "j.pdf", None, "t").unwrap();
+        insert_doc_chunks(&c, "jd1", "u", "jd", &[chunk("jd", &[1.0])]).unwrap();
+
+        upsert_document(&c, "cv2", "u", "cv", "b.pdf", None, "t").unwrap();
+
+        let contents: Vec<String> = list_doc_chunks(&c, "u")
+            .unwrap()
+            .into_iter()
+            .map(|ch| ch.content)
+            .collect();
+        assert_eq!(contents, vec!["jd".to_string()]);
     }
 
     #[test]

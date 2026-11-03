@@ -83,7 +83,8 @@ mod tests {
     fn accepts_all_known_frontend_keys() {
         // Every key the frontend may send must be accepted.
         let payload = serde_json::json!({
-            "soniox_api_key": "", "source_language": "auto", "target_language": "vi",
+            "soniox_api_key": "", "deepgram_api_key": "", "deepgram_model": "nova-3",
+            "source_language": "auto", "target_language": "vi",
             "audio_source": "system", "overlay_opacity": 0.85, "font_family": "Inter",
             "font_size": 16, "max_lines": 5, "show_original": true,
             "translation_mode": "soniox", "translation_type": "one_way",
@@ -93,8 +94,7 @@ mod tests {
             "tts_voice_id": "", "tts_speed": 1.2, "edge_tts_voice": "",
             "edge_tts_speed": 50, "tts_auto_read": true,
             "google_tts_api_key": "", "google_tts_voice": "", "google_tts_speed": 1.0,
-            "pinecone_host": "", "pinecone_vector_dimension": 1536,
-            "pinecone_api_key": "", "llm_url": "", "llm_model": "", "llm_api_key": "",
+            "llm_url": "", "llm_model": "", "llm_api_key": "",
             "suggestion_type": "translation", "app_mode": null
         });
         assert!(unknown_fields(&payload).is_empty());

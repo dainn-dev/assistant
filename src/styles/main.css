@@ -2197,10 +2197,6 @@ select:focus {
   gap: 10px;
 }
 
-.pinecone-config-row {
-  grid-template-columns: 2fr 1fr;
-}
-
 .field {
   display: flex;
   flex-direction: column;
@@ -3145,46 +3141,6 @@ input[type="range"]::-webkit-slider-thumb:hover {
   outline: none;
   border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.09);
-}
-
-.ai-dim-hint {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 12px;
-  align-items: center;
-}
-
-.ai-dim-hint-title {
-  font-size: 10px;
-  color: rgba(255,255,255,0.3);
-  margin-right: 2px;
-  white-space: nowrap;
-}
-
-.ai-dim-chip {
-  font-size: 10px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.12);
-  color: rgba(255,255,255,0.45);
-  cursor: pointer;
-  background: rgba(255,255,255,0.04);
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  white-space: nowrap;
-  user-select: none;
-}
-
-.ai-dim-chip:hover {
-  background: rgba(78,168,222,0.15);
-  border-color: rgba(78,168,222,0.4);
-  color: #4ea8de;
-}
-
-.ai-dim-chip.active {
-  background: rgba(78,168,222,0.18);
-  border-color: #4ea8de;
-  color: #4ea8de;
 }
 
 /* Sessions feature removed — access transcripts via sidebar */

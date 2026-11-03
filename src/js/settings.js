@@ -7,6 +7,8 @@ import { invoke } from './ipc.js';
 // Default settings shape
 const DEFAULT_SETTINGS = {
   soniox_api_key: '',
+  deepgram_api_key: '',
+  deepgram_model: 'nova-3',
   source_language: 'auto',
   target_language: 'vi',
   audio_source: 'system',
@@ -30,9 +32,6 @@ const DEFAULT_SETTINGS = {
   google_tts_voice: 'vi-VN-Chirp3-HD-Aoede',
   google_tts_speed: 1.0,
   // Interview RAG
-  pinecone_host: '',
-  pinecone_vector_dimension: 1536,
-  pinecone_api_key: '',
   llm_url: '',
   llm_model: '',
   llm_api_key: '',

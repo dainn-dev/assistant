@@ -116,6 +116,13 @@
               </svg>
               <span>Open transcripts folder</span>
             </button>
+            <button id="btn-subtitles-from-file" class="menu-item" title="Transcribe an audio/video file into .srt subtitles (Deepgram + LLM)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="5" width="20" height="14" rx="2" />
+                <path d="M7 15h4M13 15h4M7 11h10" />
+              </svg>
+              <span>Subtitles from file…</span>
+            </button>
           </div>
         </div>
 
@@ -329,9 +336,11 @@
           <span class="field-label">Engine</span>
           <select id="select-translation-mode">
             <option value="soniox">☁️ Soniox API (Cloud)</option>
+            <option value="deepgram">☁️ Deepgram + LLM (Cloud)</option>
             <option value="local">🖥️ Local MLX (Offline)</option>
           </select>
           <p class="hint" id="hint-mode-soniox">Real-time, 70+ languages, ~$0.12/hr</p>
+          <p class="hint" id="hint-mode-deepgram" style="display:none">Deepgram transcribes; your LLM (Settings → AI) translates — ~1s slower</p>
           <p class="hint" id="hint-mode-local" style="display:none">Offline, free, ~3-4s delay</p>
         </div>
 
@@ -346,6 +355,24 @@
             </button>
           </div>
           <p class="hint">Get key at <a href="#" id="link-soniox">console.soniox.com</a></p>
+        </div>
+
+        <div class="settings-section" id="section-deepgram" style="display:none">
+          <span class="field-label">Deepgram API Key <span class="required-badge">Required</span></span>
+          <div class="input-group">
+            <input type="password" id="input-deepgram-key" placeholder="Enter your Deepgram API key..." autocomplete="off" />
+            <button class="icon-btn small btn-toggle-ai-key" data-target="input-deepgram-key" title="Show/Hide">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+          <p class="hint">Get key at <a href="#" id="link-deepgram">console.deepgram.com</a></p>
+          <span class="field-label">Model</span>
+          <select id="select-deepgram-model">
+            <option value="nova-3">nova-3 (recommended)</option>
+            <option value="nova-2">nova-2</option>
+          </select>
         </div>
 
         <div class="settings-section" id="section-languages">
@@ -630,41 +657,6 @@
             <dl id="early-stats-body" class="early-stats-body"></dl>
             <button type="button" id="btn-copy-early-stats" class="menu-item">Copy as JSON</button>
           </details>
-        </div>
-
-        <!-- Section: Pinecone -->
-        <div class="settings-section ai-section">
-          <div class="ai-section-header">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
-            <span>Pinecone</span>
-          </div>
-          <div class="ai-fields-row">
-            <div class="ai-field ai-field--grow">
-              <label>Index host</label>
-              <input type="text" id="interview-pinecone-host" placeholder="https://your-index-xxxx.svc.us-east1-aws.pinecone.io" autocomplete="off" />
-            </div>
-            <div class="ai-field ai-field--fixed">
-              <label>Dimension</label>
-              <input type="number" id="interview-pinecone-dim" min="256" max="3072" step="1" value="1536" />
-            </div>
-          </div>
-          <div class="ai-dim-hint">
-            <span class="ai-dim-hint-title">Common dimensions:</span>
-            <span class="ai-dim-chip" data-dim="1536">text-embedding-3-small · 1536</span>
-            <span class="ai-dim-chip" data-dim="1024">text-embedding-3-small · 1024</span>
-            <span class="ai-dim-chip" data-dim="768">text-embedding-3-small · 768</span>
-            <span class="ai-dim-chip" data-dim="3072">text-embedding-3-large · 3072</span>
-            <span class="ai-dim-chip" data-dim="768">Gemini text-embedding-004 · 768</span>
-          </div>
-          <div class="ai-field">
-            <label>Pinecone API Key</label>
-            <div class="input-group">
-              <input type="password" id="pinecone-api-key" autocomplete="off" placeholder="pcsk_…" />
-              <button class="icon-btn small btn-toggle-ai-key" data-target="pinecone-api-key" title="Show/Hide">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              </button>
-            </div>
-          </div>
         </div>
 
         <!-- Section: LLM -->

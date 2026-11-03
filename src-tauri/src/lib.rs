@@ -102,6 +102,8 @@ pub fn run() {
             commands::profile::draft_profile_from_documents,
             commands::review::review_session,
             commands::review::read_session_review,
+            commands::translate::translate_segment,
+            commands::file_mode::transcribe_media_file,
             get_platform_info,
         ])
         .run(tauri::generate_context!())
